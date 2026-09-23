@@ -407,7 +407,7 @@ class TestPublicReply:
             deliver(client, at_now(load_delivery("comment")))
             run_queued()
         assert api.bodies(f"{COMMENT_ID}/replies") == []
-        row = HandledComment.objects.get()
+        row = HandledComment.objects.for_workspace(instagram_connection.workspace_id).get()
         assert row.public_reply_claimed_at is None
         assert row.public_reply_sent_at is None
         assert row.public_reply_status == ""
@@ -425,7 +425,7 @@ class TestPublicReply:
             run_queued()
         (body,) = api.bodies(f"{COMMENT_ID}/replies")
         assert body["message"] in {"one", "two", "three"}
-        row = HandledComment.objects.get()
+        row = HandledComment.objects.for_workspace(instagram_connection.workspace_id).get()
         assert row.public_reply_claimed_at is not None
         assert row.public_reply_sent_at is not None
         assert row.public_reply_status == PublicReplyStatus.SENT
@@ -442,7 +442,7 @@ class TestPublicReply:
             deliver(client, at_now(load_delivery("comment")))
             run_queued()
         assert len(api.message_bodies()) == 1
-        row = HandledComment.objects.get()
+        row = HandledComment.objects.for_workspace(instagram_connection.workspace_id).get()
         assert row.public_reply_claimed_at is not None
         assert row.public_reply_sent_at is None
         assert row.public_reply_status == PublicReplyStatus.FAILED
