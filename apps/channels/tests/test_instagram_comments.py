@@ -156,6 +156,38 @@ class TestCommentToDm:
         assert row.private_reply_sent_at is not None
         assert row.contact_id == identity.contact_id
 
+    def test_any_comment_on_any_post_triggers_when_include_keywords_are_blank(
+        self,
+        client: Client,
+        tenancy: Tenancy,
+        instagram_connection: ChannelConnection,
+        comment_trigger: Trigger,
+    ) -> None:
+        """Our product-level "Any Comment" contract.
+
+        An empty include list is intentional, not incomplete configuration:
+        every attributable public comment matches. post_scope=all likewise
+        covers a post id the trigger never saw when it was authored, including
+        posts published later.
+        """
+        comment_trigger.config_json["include_keywords"] = []
+        comment_trigger.config_json["post_scope"] = "all"
+        comment_trigger.save(update_fields=["config_json", "updated_at"])
+
+        payload = at_now(load_delivery("comment"))
+        value = payload["entry"][0]["changes"][0]["value"]
+        value["text"] = "no configured keyword appears here"
+        value["media"]["id"] = "17800000000000999"
+
+        with fake_graph() as api:
+            assert deliver(client, payload).status_code == 200
+            assert run_queued() == 1
+
+        assert api.bodies(f"{COMMENT_ID}/replies") == [{"message": "Sent you a DM!"}]
+        assert api.message_bodies()[0]["recipient"] == {"comment_id": COMMENT_ID}
+        row = HandledComment.objects.for_workspace(tenancy.workspace).get()
+        assert row.post_id == "17800000000000999"
+
     def test_a_second_comment_from_the_same_person_gets_no_second_reply(
         self,
         client: Client,
