@@ -704,6 +704,21 @@ def _dispatch(
     # end of this function needs the same contact. Reading it again there would
     # be free only for as long as _finalize keeps returning the same instance.
     contact = message.conversation.contact
+
+    # A connection can become unusable after a message was queued: an operator
+    # can disable it, or a token refresh can move it to needs_reauth. This check
+    # lives at the last provider-call boundary so inline sends and send_retry
+    # actions obey the same invariant and no caller can accidentally bypass it.
+    from apps.channels.models import ConnectionStatus
+
+    if connection.status != ConnectionStatus.ACTIVE:
+        finalized = _finalize_if_queued(
+            message,
+            status=MessageStatus.FAILED,
+            error=Denial.CONNECTION_INACTIVE.value,
+        )
+        return finalized or _reread(message)
+
     if contact.status != ContactStatus.ACTIVE:
         # The last gate before a provider call, and the only one that catches a
         # contact deleted *after* the message was queued. `send_outbound` cannot

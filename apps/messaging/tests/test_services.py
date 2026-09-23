@@ -96,6 +96,21 @@ class TestTheContract:
         ):
             assert callable(getattr(services, name))
 
+    def test_an_inactive_connection_never_reaches_the_provider(
+        self, tenancy: Any, contact: Any, connection: Any, identity: Any
+    ) -> None:
+        from apps.channels.models import ConnectionStatus
+
+        connection.status = ConnectionStatus.NEEDS_REAUTH
+        connection.save(update_fields=["status", "updated_at"])
+
+        with registered(Platform.TELEGRAM) as adapter:
+            message = send(tenancy, contact, connection)
+
+        assert adapter.sends == []
+        assert message.status == MessageStatus.FAILED
+        assert message.error == Denial.CONNECTION_INACTIVE
+
     def test_a_denial_never_raises(self, tenancy: Any, contact: Any, connection: Any) -> None:
         """Contract 1: denials come back as a failed row. A raise would kill the
         flow that a merely-refused send should not (SPEC §9.5)."""

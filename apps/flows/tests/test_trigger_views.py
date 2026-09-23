@@ -232,6 +232,14 @@ class TestTheForm:
         assert response.status_code == 200
         assert b"<form" in response.content
 
+    def test_comment_post_picker_includes_the_selected_channel(self, tenancy, client_for, flow):
+        response = client_for(tenancy.owner).get(
+            _url("flows:trigger_form", tenancy, flow) + f"?type={TriggerType.COMMENT}"
+        )
+
+        assert response.status_code == 200
+        assert b'hx-include="#trigger-connection"' in response.content
+
     def test_the_form_closes_only_on_a_real_save(self, tenancy, client_for, flow):
         """The template keys its close on the ``triggersChanged`` header rather
         than on ``event.detail.successful``, because every refusal is

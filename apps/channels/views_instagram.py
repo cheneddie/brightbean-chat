@@ -48,6 +48,7 @@ from apps.channels.plan import plan_refusal
 from apps.channels.providers import instagram
 from apps.channels.providers.exceptions import APIError
 from apps.common.platforms import Platform
+from apps.common.shortcuts import get_scoped_object_or_404
 from apps.members.decorators import require_permission
 from apps.members.models import WorkspaceMembership
 from apps.members.requests import WorkspaceRequest
@@ -101,7 +102,11 @@ def instagram_connect(request: WorkspaceRequest, workspace_id: str) -> HttpRespo
         except oauth.InstagramCredentialsMissingError:
             error = NO_CREDENTIALS
         else:
-            state = oauth.sign_state(workspace_id=request.workspace.pk, user_id=request.user.pk)
+            state = oauth.mint_state(
+                request.session,
+                workspace_id=request.workspace.pk,
+                user_id=request.user.pk,
+            )
             return redirect(oauth.authorize_url(client_id=client_id, state=state))
 
     return render(
@@ -134,7 +139,8 @@ def instagram_callback(request: Any) -> HttpResponse:
     confirm that a workspace id or a user id names something real
     (SECURITY-BASELINE §1, and the same rule ``unsign_or_404`` applies).
     """
-    payload = oauth.read_state(request.GET.get("state", ""))
+    raw_state = request.GET.get("state", "")
+    payload = oauth.read_state(raw_state)
     if payload is None:
         logger.info("Instagram callback: the state parameter did not verify.")
         raise Http404(STATE_REJECTED)
@@ -152,6 +158,13 @@ def instagram_callback(request: Any) -> HttpResponse:
 
     workspace = membership.workspace
     settings_url = reverse("channels:list", kwargs={"workspace_id": workspace.pk})
+
+    # Claim only after the signed user and workspace permission checks. The
+    # nonce is session-bound and one-time; replaying the same callback is
+    # refused before any code exchange or connection mutation.
+    if oauth.consume_state(request.session, raw_state) is None:
+        logger.info("Instagram callback: the state was not pending or was already consumed.")
+        raise Http404(STATE_REJECTED)
 
     error = request.GET.get("error_reason") or request.GET.get("error")
     if error:
@@ -306,17 +319,39 @@ def instagram_posts(request: WorkspaceRequest, workspace_id: str) -> HttpRespons
     down its error path and show a failure where "connect an Instagram account
     first" is an ordinary thing to render.
     """
-    connection = (
-        ChannelConnection.objects.for_workspace(request.workspace)
-        .filter(platform=Platform.INSTAGRAM.value, status=ConnectionStatus.ACTIVE)
-        .order_by("created_at")
-        .first()
+    active = ChannelConnection.objects.for_workspace(request.workspace).filter(
+        platform=Platform.INSTAGRAM.value,
+        status=ConnectionStatus.ACTIVE,
     )
+    selected_id = (request.GET.get("channel_connection") or "").strip()
     context: dict[str, Any] = {"posts": [], "reason": "", "connect_url": ""}
-    if connection is None:
-        context["reason"] = "Connect an Instagram account to pick posts from it."
-        context["connect_url"] = reverse("channels:instagram_connect", kwargs={"workspace_id": workspace_id})
-        return render(request, "channels/_instagram_posts.html", context)
+
+    if selected_id:
+        selected = get_scoped_object_or_404(
+            ChannelConnection,
+            request.workspace,
+            pk=selected_id,
+        )
+        if selected.platform != Platform.INSTAGRAM.value:
+            context["reason"] = "Choose an Instagram channel above before picking posts."
+            return render(request, "channels/_instagram_posts.html", context)
+        if selected.status != ConnectionStatus.ACTIVE:
+            context["reason"] = "Reconnect this Instagram channel before picking posts."
+            return render(request, "channels/_instagram_posts.html", context)
+        connection = selected
+    else:
+        count = active.count()
+        if count == 0:
+            context["reason"] = "Connect an Instagram account to pick posts from it."
+            context["connect_url"] = reverse("channels:instagram_connect", kwargs={"workspace_id": workspace_id})
+            return render(request, "channels/_instagram_posts.html", context)
+        if count > 1:
+            context["reason"] = "Choose an Instagram channel above before picking posts."
+            return render(request, "channels/_instagram_posts.html", context)
+        connection = active.first()
+        if connection is None:  # pragma: no cover - count() above proved one row exists
+            context["reason"] = "Connect an Instagram account to pick posts from it."
+            return render(request, "channels/_instagram_posts.html", context)
 
     try:
         context["posts"] = instagram.recent_media(connection)
