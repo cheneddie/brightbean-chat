@@ -27,6 +27,7 @@ class TestTheTable:
         telegram = capabilities_for(Platform.TELEGRAM)
 
         assert telegram.supports_block("image") is True
+        assert telegram.supports_block("link") is True
         assert telegram.supports_block("max_text_len") is False
         assert telegram.supports_block("inbound") is False
         assert telegram.supports_block("window_hours") is False

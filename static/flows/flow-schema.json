@@ -307,6 +307,29 @@
       ],
       "type": "object"
     },
+    "block_link": {
+      "additionalProperties": false,
+      "properties": {
+        "label": {
+          "maxLength": 200,
+          "type": "string"
+        },
+        "type": {
+          "const": "link",
+          "type": "string"
+        },
+        "url": {
+          "maxLength": 2000,
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "url"
+      ],
+      "type": "object"
+    },
     "block_media": {
       "additionalProperties": false,
       "anyOf": [
@@ -1071,6 +1094,7 @@
           "file": "#/$defs/block_media",
           "gallery": "#/$defs/block_gallery",
           "image": "#/$defs/block_media",
+          "link": "#/$defs/block_link",
           "text": "#/$defs/block_text",
           "video": "#/$defs/block_media"
         },
@@ -1079,6 +1103,9 @@
       "oneOf": [
         {
           "$ref": "#/$defs/block_text"
+        },
+        {
+          "$ref": "#/$defs/block_link"
         },
         {
           "$ref": "#/$defs/block_media"

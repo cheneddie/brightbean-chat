@@ -136,6 +136,8 @@ class Capabilities:
         without a capability flag downgrades to text rather than being passed
         through to a platform that will reject it.
         """
+        if kind == "link":
+            return self.text
         return bool(getattr(self, kind, False)) if kind in _BLOCK_FLAGS else False
 
     def max_bytes_for(self, kind: str) -> int:
@@ -152,7 +154,7 @@ class Capabilities:
 #: The capability names that describe a renderable block. Kept as a frozen set
 #: so ``supports_block`` cannot be talked into reading ``inbound`` or
 #: ``broadcast_allowed`` by passing their names as a block kind.
-_BLOCK_FLAGS = frozenset({"text", "image", "audio", "video", "file", "card", "gallery"})
+_BLOCK_FLAGS = frozenset({"text", "link", "image", "audio", "video", "file", "card", "gallery"})
 
 #: The block kinds that name a file and therefore have a byte ceiling. A subset
 #: of :data:`_BLOCK_FLAGS`: text, cards and galleries are structure rather than

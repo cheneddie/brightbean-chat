@@ -24,6 +24,7 @@ from apps.channels.events import (
     Card,
     CardBlock,
     GalleryBlock,
+    LinkBlock,
     MediaBlock,
     OutboundMessage,
     QuickReply,
@@ -275,6 +276,36 @@ class TestSending:
         assert result.provider_message_id == "mid.sent.1"
         assert graph.paths() == ["me/messages"]
         assert graph.bodies("me/messages")[0]["recipient"] == {"id": IG_USER_ID}
+
+    def test_a_standalone_link_reaches_instagram_as_clickable_text(
+        self, instagram_connection: ChannelConnection
+    ) -> None:
+        outbound = OutboundMessage(blocks=(LinkBlock(url="https://x.test/docs", label="Docs"),))
+        with fake_graph() as graph:
+            result = send(instagram_connection, outbound)
+        assert result.status == "sent"
+        assert graph.bodies("me/messages") == [
+            {"recipient": {"id": IG_USER_ID}, "message": {"text": "Docs: https://x.test/docs"}}
+        ]
+
+    @pytest.mark.parametrize("control", ["button", "quick_reply"])
+    def test_media_only_controls_fail_before_any_provider_call(
+        self, instagram_connection: ChannelConnection, control: str
+    ) -> None:
+        kwargs: dict[str, Any] = {}
+        if control == "button":
+            kwargs["buttons"] = (Button(id="a", label="Alpha"),)
+        else:
+            kwargs["quick_replies"] = (QuickReply(id="y", label="Yes"),)
+        outbound = OutboundMessage(
+            blocks=(MediaBlock(kind="image", url="https://cdn.test/a.png"),),
+            **kwargs,
+        )
+        with fake_graph() as graph:
+            result = send(instagram_connection, outbound)
+        assert result.status == "failed"
+        assert result.error == "controls_unrenderable"
+        assert graph.calls == []
 
     def test_the_token_travels_in_a_header_not_the_url(self, instagram_connection: ChannelConnection) -> None:
         """A query-string token lands in every proxy access log for ever."""

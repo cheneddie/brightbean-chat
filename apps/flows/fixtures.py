@@ -26,6 +26,7 @@ NODE_CONFIGS: dict[str, dict[str, Any]] = {
     "send_message": {
         "blocks": [
             {"type": "text", "text": "Hi {{first_name}}, welcome aboard."},
+            {"type": "link", "url": "https://example.test/docs", "label": "Read the docs"},
             {"type": "image", "url": "https://example.test/welcome.png", "caption": "Welcome"},
         ],
         "buttons": [

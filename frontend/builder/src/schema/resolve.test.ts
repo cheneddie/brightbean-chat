@@ -34,10 +34,10 @@ describe("tagged unions", () => {
   it("reads its choices from the discriminator mapping, not the oneOf branches", () => {
     const block = deref(SCHEMA.$defs["message_block"]);
     expect(isTaggedUnion(block)).toBe(true);
-    // Seven tags…
-    expect(variantChoices(block)).toHaveLength(7);
-    // …over four shapes, because image/audio/video/file all map to block_media.
-    expect(block?.oneOf).toHaveLength(4);
+    // Eight tags…
+    expect(variantChoices(block)).toHaveLength(8);
+    // …over five shapes, because image/audio/video/file all map to block_media.
+    expect(block?.oneOf).toHaveLength(5);
     expect(variantSchema(block, "image")).toBe(variantSchema(block, "video"));
   });
 

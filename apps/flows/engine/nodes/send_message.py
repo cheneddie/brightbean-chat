@@ -31,7 +31,16 @@ from uuid import UUID
 
 from apps.channels.capabilities import capabilities_for
 from apps.channels.downgrade import downgrade
-from apps.channels.events import Button, Card, CardBlock, GalleryBlock, MediaBlock, OutboundMessage, QuickReply
+from apps.channels.events import (
+    Button,
+    Card,
+    CardBlock,
+    GalleryBlock,
+    LinkBlock,
+    MediaBlock,
+    OutboundMessage,
+    QuickReply,
+)
 from apps.channels.events import TextBlock as OutboundText
 from apps.flows.engine.context import NodeContext
 from apps.flows.engine.nodes.base import Node
@@ -210,6 +219,10 @@ def _blocks(ctx: NodeContext) -> list[Any]:
             text = ctx.render(block.get("text"))
             if text:
                 rendered.append(OutboundText(text=text))
+        elif kind == "link":
+            url = ctx.render(block.get("url"))
+            if url:
+                rendered.append(LinkBlock(url=url, label=ctx.render(block.get("label"))))
         elif kind in _MEDIA_KINDS:
             rendered.append(
                 MediaBlock(kind=str(kind), url=_media_url(ctx, block), caption=ctx.render(block.get("caption")))

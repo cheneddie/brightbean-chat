@@ -58,6 +58,7 @@ class Failure(StrEnum):
     PROVIDER_UNAVAILABLE = "provider_unavailable"
     RATE_LIMITED = "rate_limited"
     RATE_DEFERRED = "rate_deferred"
+    CONTROLS_UNRENDERABLE = "controls_unrenderable"
     PRIVATE_REPLY_MULTIPART = "private_reply_multipart"
     PRIVATE_REPLY_UNAVAILABLE = "private_reply_unavailable"
     RETRIES_EXHAUSTED = "retries_exhausted"
@@ -112,6 +113,7 @@ REASON_COPY: dict[str, str] = {
     Failure.PROVIDER_UNAVAILABLE: "The platform could not be reached.",
     Failure.RATE_LIMITED: "The platform is throttling this connection.",
     Failure.RATE_DEFERRED: "Waiting for this connection's send rate to allow another message.",
+    Failure.CONTROLS_UNRENDERABLE: "Buttons or quick replies could not be represented without losing their actions.",
     Failure.PRIVATE_REPLY_MULTIPART: "A comment private reply must render as exactly one platform message.",
     Failure.PRIVATE_REPLY_UNAVAILABLE: "The one-time comment private-reply allowance is no longer available.",
     Failure.RETRIES_EXHAUSTED: "Gave up after retrying this send.",
