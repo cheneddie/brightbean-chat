@@ -70,3 +70,7 @@ See:
 - `docs/IG-FIRST-ROADMAP.md`
 - `docs/QA-MATRIX.md`
 - existing `docs/SECURITY-BASELINE.md`
+## CI activation status
+
+GitHub Issues and Actions were enabled on the fork on 2026-09-23. This D0 branch is the first gate used to verify that the fork's inherited CI/security workflows actually execute before any later development stage is merged.
+
