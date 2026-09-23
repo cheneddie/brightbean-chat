@@ -8,13 +8,14 @@ a ``SELECT`` then ``INSERT`` lets both through — every time, not rarely.
 """
 
 import logging
+import re
 from datetime import datetime, timedelta
 from typing import Any
 
 from django.db import IntegrityError, transaction
 from django.utils import timezone
 
-from apps.flows.models import DefaultReplyState, HandledComment
+from apps.flows.models import DefaultReplyState, HandledComment, PublicReplyStatus
 
 __all__ = [
     "DEFAULT_REPLY_INTERVAL",
@@ -25,6 +26,8 @@ __all__ = [
     "may_claim_comment",
     "may_private_reply",
     "mark_private_reply_sent",
+    "mark_public_reply_failed",
+    "mark_public_reply_sent",
     "private_reply_deadline",
     "record_comment",
 ]
@@ -43,6 +46,8 @@ PRIVATE_REPLY_WINDOW = timedelta(days=7)
 #: distinct comment ids sharing a 200-character prefix would otherwise become one
 #: key, and the second comment would be silently dropped as already handled.
 _MAX_PLATFORM_ID = 200
+_MAX_PUBLIC_REPLY_ERROR = 100
+_MACHINE_ERROR = re.compile(r"[^A-Za-z0-9_.:-]+")
 
 
 def claim_default_reply(contact: Any, connection: Any, *, now: datetime | None = None) -> bool:
@@ -185,29 +190,66 @@ def mark_private_reply_sent(row: HandledComment, *, contact: Any = None, now: da
 
 
 def claim_public_reply(row: HandledComment, *, now: datetime | None = None) -> bool:
-    """May the public reply go out — and if so, take the guard.
+    """Take the one-time pre-call claim for a configured public reply.
 
-    A compare-and-set rather than a read followed by a write, for the same
-    reason :func:`claim_default_reply` is one: the caller is a queue handler,
-    and ``apps.queueing.registry`` documents that a handler "must be safe to run
-    more than once" because zombie recovery re-runs one that committed without
-    being marked done. Of two concurrent or repeated runs exactly one sees
-    ``updated == 1``; the loser posts nothing.
-
-    Taken *before* the call rather than recorded after it, because the failure
-    this prevents is a duplicate comment on somebody's post, and a claim spent
-    on a reply that then failed costs only that reply — the private one, which
-    is what the flow author configured, is a separate call and unaffected.
+    The claim is deliberately **not** proof of delivery. It is spent before the
+    provider call because a timeout can mean "Meta accepted it but our response
+    was lost"; retrying that visible side effect could post a duplicate comment.
+    Delivery outcome is recorded separately by :func:`mark_public_reply_sent`
+    or :func:`mark_public_reply_failed`.
     """
     moment = now or timezone.now()
     updated = (
         HandledComment.objects.for_workspace(row.workspace_id)
-        .filter(pk=row.pk, public_reply_sent_at__isnull=True)
-        .update(public_reply_sent_at=moment, updated_at=moment)
+        .filter(pk=row.pk, public_reply_claimed_at__isnull=True)
+        .update(
+            public_reply_claimed_at=moment,
+            public_reply_status=PublicReplyStatus.CLAIMED,
+            public_reply_error="",
+            updated_at=moment,
+        )
     )
     if updated:
-        row.public_reply_sent_at = moment
+        row.public_reply_claimed_at = moment
+        row.public_reply_status = PublicReplyStatus.CLAIMED
+        row.public_reply_error = ""
     return bool(updated)
+
+
+def mark_public_reply_sent(row: HandledComment, *, now: datetime | None = None) -> None:
+    """Record a provider-confirmed public reply without reopening its claim."""
+    moment = now or timezone.now()
+    HandledComment.objects.for_workspace(row.workspace_id).filter(
+        pk=row.pk,
+        public_reply_claimed_at__isnull=False,
+    ).update(
+        public_reply_sent_at=moment,
+        public_reply_status=PublicReplyStatus.SENT,
+        public_reply_error="",
+        updated_at=moment,
+    )
+    row.public_reply_sent_at = moment
+    row.public_reply_status = PublicReplyStatus.SENT
+    row.public_reply_error = ""
+
+
+def mark_public_reply_failed(row: HandledComment, error: str, *, now: datetime | None = None) -> None:
+    """Record a failed provider call using a bounded machine-readable code only."""
+    moment = now or timezone.now()
+    safe_error = _MACHINE_ERROR.sub("_", str(error)).strip("_")[:_MAX_PUBLIC_REPLY_ERROR]
+    if not safe_error:
+        safe_error = "provider_unavailable"
+    HandledComment.objects.for_workspace(row.workspace_id).filter(
+        pk=row.pk,
+        public_reply_claimed_at__isnull=False,
+        public_reply_sent_at__isnull=True,
+    ).update(
+        public_reply_status=PublicReplyStatus.FAILED,
+        public_reply_error=safe_error,
+        updated_at=moment,
+    )
+    row.public_reply_status = PublicReplyStatus.FAILED
+    row.public_reply_error = safe_error
 
 
 def may_claim_comment(commented_at: datetime, *, now: datetime | None = None) -> bool:

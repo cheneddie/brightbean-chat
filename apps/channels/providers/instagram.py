@@ -1586,9 +1586,15 @@ def _send_public_reply(connection: ChannelConnection, row: Any, config: dict[str
     try:
         reply_to_comment(access_token(connection), row.comment_id, text)
     except APIError as exc:
+        detail = exc.code or (str(exc.status_code) if exc.status_code is not None else "")
+        code = f"provider_rejected:{detail}" if detail else "provider_rejected"
+        guards.mark_public_reply_failed(row, code)
         logger.info("Instagram: public reply to comment row %s was refused (code=%s).", row.pk, exc.code)
     except Exception:
+        guards.mark_public_reply_failed(row, "provider_unavailable")
         logger.exception("Instagram: public reply failed for comment row %s.", row.pk)
+    else:
+        guards.mark_public_reply_sent(row)
 
 
 def _open_thread(connection: ChannelConnection, row: Any, payload: dict[str, Any]) -> None:

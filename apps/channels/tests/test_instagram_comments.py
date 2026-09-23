@@ -27,7 +27,7 @@ from apps.channels.models import ChannelConnection
 from apps.channels.providers.instagram import COMMENT_REPLY_ACTION
 from apps.channels.providers.meta_common import SIGNATURE_HEADER
 from apps.channels.tests.instagram_support import IG_USER_ID, at_now, fake_graph, load_delivery, sign
-from apps.flows.models import Flow, FlowExecution, HandledComment, Trigger, TriggerType
+from apps.flows.models import Flow, FlowExecution, HandledComment, PublicReplyStatus, Trigger, TriggerType
 from apps.flows.tests.support import graph as flow_graph
 from apps.flows.tests.support import node
 from apps.flows.triggers import comments as comment_responders
@@ -407,6 +407,11 @@ class TestPublicReply:
             deliver(client, at_now(load_delivery("comment")))
             run_queued()
         assert api.bodies(f"{COMMENT_ID}/replies") == []
+        row = HandledComment.objects.get()
+        assert row.public_reply_claimed_at is None
+        assert row.public_reply_sent_at is None
+        assert row.public_reply_status == ""
+        assert row.public_reply_error == ""
         # The private reply still goes out: it is the thing the flow is for.
         assert len(api.message_bodies()) == 1
 
@@ -420,6 +425,11 @@ class TestPublicReply:
             run_queued()
         (body,) = api.bodies(f"{COMMENT_ID}/replies")
         assert body["message"] in {"one", "two", "three"}
+        row = HandledComment.objects.get()
+        assert row.public_reply_claimed_at is not None
+        assert row.public_reply_sent_at is not None
+        assert row.public_reply_status == PublicReplyStatus.SENT
+        assert row.public_reply_error == ""
 
     def test_a_failed_public_reply_does_not_cost_the_private_one(
         self, client: Client, instagram_connection: ChannelConnection, comment_trigger: Trigger
@@ -432,6 +442,11 @@ class TestPublicReply:
             deliver(client, at_now(load_delivery("comment")))
             run_queued()
         assert len(api.message_bodies()) == 1
+        row = HandledComment.objects.get()
+        assert row.public_reply_claimed_at is not None
+        assert row.public_reply_sent_at is None
+        assert row.public_reply_status == PublicReplyStatus.FAILED
+        assert row.public_reply_error == "provider_rejected:400"
 
 
 @pytest.mark.usefixtures("instagram_app", "real_pipeline")
@@ -725,6 +740,11 @@ class TestPublicReplyIdempotence:
             run_queued()
             run_queued()
         assert len(api.bodies(f"{COMMENT_ID}/replies")) == 1
+        row = HandledComment.objects.for_workspace(tenancy.workspace).get()
+        assert row.public_reply_claimed_at is not None
+        assert row.public_reply_sent_at is not None
+        assert row.public_reply_status == PublicReplyStatus.SENT
+        assert row.public_reply_error == ""
 
     def test_the_claim_is_taken_even_when_the_reply_is_refused(
         self,
@@ -744,7 +764,10 @@ class TestPublicReplyIdempotence:
             run_queued()
         assert len(api.bodies(f"{COMMENT_ID}/replies")) == 1
         row = HandledComment.objects.for_workspace(tenancy.workspace).get()
-        assert row.public_reply_sent_at is not None
+        assert row.public_reply_claimed_at is not None
+        assert row.public_reply_sent_at is None
+        assert row.public_reply_status == PublicReplyStatus.FAILED
+        assert row.public_reply_error == "provider_rejected:400"
 
 
 def _send(tenancy: Tenancy, contact: Any, connection: ChannelConnection, text: str, *, source: str) -> Any:

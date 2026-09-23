@@ -46,6 +46,7 @@ __all__ = [
     "FlowStatus",
     "FlowVersion",
     "HandledComment",
+    "PublicReplyStatus",
     "RoutedEvent",
     "StartedBy",
     "Trigger",
@@ -59,6 +60,15 @@ class FlowStatus(models.TextChoices):
     DRAFT = "draft", "Draft"
     ACTIVE = "active", "Active"
     ARCHIVED = "archived", "Archived"
+
+
+class PublicReplyStatus(models.TextChoices):
+    """Persisted outcome of a configured public comment reply."""
+
+    CLAIMED = "claimed", "Claimed"
+    SENT = "sent", "Sent"
+    FAILED = "failed", "Failed"
+    LEGACY_UNKNOWN = "legacy_unknown", "Legacy outcome unknown"
 
 
 class Flow(WorkspaceScopedModel):
@@ -459,14 +469,23 @@ class HandledComment(WorkspaceScopedModel):
     once_per_contact_per_post = models.BooleanField(default=True)
 
     private_reply_sent_at = models.DateTimeField(null=True, blank=True)
-    #: When the trigger's public reply was posted under the comment, if it
-    #: configured one. Separate from ``private_reply_sent_at`` because the two
-    #: are different calls to different endpoints with different failure modes,
-    #: and because the queue's handler contract (``apps.queueing.registry``)
-    #: says a handler "must be safe to run more than once" — zombie recovery
-    #: re-runs one that committed without being marked done. Without a durable
-    #: record, that re-run posts a second visible comment on the customer's post.
+
+    #: The public reply has two clocks because they answer different questions.
+    #: ``claimed_at`` is the pre-provider-call idempotency guard: once it is
+    #: set the visible comment is never attempted again, because a lost provider
+    #: response is an unknown outcome and retrying could create a duplicate.
+    #: ``sent_at`` means the provider actually returned success.
+    public_reply_claimed_at = models.DateTimeField(null=True, blank=True)
     public_reply_sent_at = models.DateTimeField(null=True, blank=True)
+    public_reply_status = models.CharField(
+        max_length=16,
+        choices=PublicReplyStatus.choices,
+        blank=True,
+        default="",
+    )
+    #: Sanitized machine-readable code only. Provider prose is deliberately
+    #: excluded because it can quote request material, including credentials.
+    public_reply_error = models.CharField(max_length=100, blank=True, default="")
 
     class Meta:
         db_table = "flows_handled_comment"
@@ -480,6 +499,36 @@ class HandledComment(WorkspaceScopedModel):
                 fields=["channel_connection", "post_id", "commenter_ref"],
                 condition=models.Q(once_per_contact_per_post=True),
                 name="flows_handledcomment_once_per_commenter_per_post",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    models.Q(
+                        public_reply_status="",
+                        public_reply_claimed_at__isnull=True,
+                        public_reply_sent_at__isnull=True,
+                    )
+                    | models.Q(
+                        public_reply_status=PublicReplyStatus.CLAIMED,
+                        public_reply_claimed_at__isnull=False,
+                        public_reply_sent_at__isnull=True,
+                    )
+                    | models.Q(
+                        public_reply_status=PublicReplyStatus.FAILED,
+                        public_reply_claimed_at__isnull=False,
+                        public_reply_sent_at__isnull=True,
+                    )
+                    | models.Q(
+                        public_reply_status=PublicReplyStatus.LEGACY_UNKNOWN,
+                        public_reply_claimed_at__isnull=False,
+                        public_reply_sent_at__isnull=True,
+                    )
+                    | models.Q(
+                        public_reply_status=PublicReplyStatus.SENT,
+                        public_reply_claimed_at__isnull=False,
+                        public_reply_sent_at__isnull=False,
+                    )
+                ),
+                name="flows_hcomment_public_reply_state",
             ),
         ]
         indexes = [
