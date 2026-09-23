@@ -36,6 +36,7 @@ from apps.channels.events import (
     Button,
     CardBlock,
     GalleryBlock,
+    LinkBlock,
     MediaBlock,
     OutboundMessage,
     QuickReply,
@@ -141,6 +142,8 @@ class _State:
             self.add_gallery(block)
         elif isinstance(block, CardBlock):
             self.add_card(block)
+        elif isinstance(block, LinkBlock):
+            self.add_link(block)
         elif isinstance(block, MediaBlock):
             self.add_media(block)
         else:
@@ -174,6 +177,14 @@ class _State:
         # The card's own buttons have no card left to hang off, so they compete
         # for this message's button slots and overflow into its text.
         self.resolve_buttons(card.buttons, self.current)
+
+    def add_link(self, block: LinkBlock) -> None:
+        """Standalone links are losslessly represented as ordinary text."""
+        if not block.url:
+            return
+        text = INLINE_URL.format(label=block.label, url=block.url) if block.label else block.url
+        self.current.blocks.append(TextBlock(text=text))
+        self.notes.append("link: rendered as text")
 
     def add_media(self, block: MediaBlock) -> None:
         """An unsupported media kind degrades to its caption plus the URL."""

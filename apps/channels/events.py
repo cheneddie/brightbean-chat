@@ -39,6 +39,7 @@ __all__ = [
     "EventPayload",
     "EventType",
     "GalleryBlock",
+    "LinkBlock",
     "MediaBlock",
     "NormalizedEvent",
     "OutboundMessage",
@@ -227,6 +228,20 @@ class TextBlock:
 
 
 @dataclass(frozen=True)
+class LinkBlock:
+    """A standalone link authored as content rather than as a button.
+
+    label is optional display copy. The shared downgrade renderer turns this
+    into lossless plain text, so every text-capable adapter can deliver it
+    without pretending to have a native link-card primitive.
+    """
+
+    url: str
+    label: str = ""
+    kind: str = "link"
+
+
+@dataclass(frozen=True)
 class MediaBlock:
     """An image, audio clip, video or file, addressed by URL.
 
@@ -263,7 +278,7 @@ class GalleryBlock:
 
 
 #: Anything that may appear in ``OutboundMessage.blocks``.
-type Block = TextBlock | MediaBlock | CardBlock | GalleryBlock
+type Block = TextBlock | LinkBlock | MediaBlock | CardBlock | GalleryBlock
 
 
 @dataclass(frozen=True)
@@ -402,6 +417,8 @@ def _block_json(block: Block) -> dict[str, Any]:
     """Serialize one block. ``type`` rather than ``kind``, per SPEC §7.2."""
     if isinstance(block, TextBlock):
         return {"type": "text", "text": block.text}
+    if isinstance(block, LinkBlock):
+        return {"type": "link", "url": block.url, "label": block.label}
     if isinstance(block, MediaBlock):
         return {"type": block.kind, "url": block.url, "caption": block.caption}
     if isinstance(block, CardBlock):

@@ -16,6 +16,7 @@ from apps.channels.events import (
     Card,
     CardBlock,
     GalleryBlock,
+    LinkBlock,
     MediaBlock,
     OutboundMessage,
     QuickReply,
@@ -156,6 +157,20 @@ class TestMedia:
     def test_supported_media_is_left_alone(self) -> None:
         block = MediaBlock(kind="image", url="https://x.test/i.png")
         assert downgrade(OutboundMessage(blocks=(block,)), EVERYTHING).messages[0].blocks == (block,)
+
+
+class TestLinks:
+    def test_a_standalone_link_is_losslessly_rendered_as_text(self) -> None:
+        result = downgrade(
+            OutboundMessage(blocks=(LinkBlock(url="https://x.test/docs", label="Docs"),)),
+            TEXT_ONLY,
+        )
+        assert texts(result.messages[0]) == ["Docs: https://x.test/docs"]
+        assert result.notes == ("link: rendered as text",)
+
+    def test_an_unlabelled_link_is_just_the_url(self) -> None:
+        result = downgrade(OutboundMessage(blocks=(LinkBlock(url="https://x.test/docs"),)), EVERYTHING)
+        assert texts(result.messages[0]) == ["https://x.test/docs"]
 
 
 class TestButtons:

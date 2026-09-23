@@ -25,6 +25,7 @@ from apps.channels.events import (
     Card,
     CardBlock,
     GalleryBlock,
+    LinkBlock,
     MediaBlock,
     OutboundMessage,
     QuickReply,
@@ -92,6 +93,9 @@ def _block(item: dict[str, Any]) -> Any:
     if kind == "text":
         text = _text(item.get("text"))
         return TextBlock(text=text) if text else None
+    if kind == "link":
+        url = _text(item.get("url"))
+        return LinkBlock(url=url, label=_text(item.get("label"))) if url else None
     if kind in _MEDIA_KINDS:
         url = _text(item.get("url"))
         return MediaBlock(kind=kind, url=url, caption=_text(item.get("caption"))) if url else None

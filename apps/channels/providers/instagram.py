@@ -329,6 +329,29 @@ def wire_messages(recipient: dict[str, Any], message: OutboundMessage) -> list[d
     return [_body(recipient, part, message.tag) for part in parts]
 
 
+def _controls_unrenderable(message: OutboundMessage, bodies: list[dict[str, Any]]) -> bool:
+    """Whether authored controls disappeared while building Instagram payloads."""
+    if not message.buttons and not message.quick_replies:
+        return False
+
+    button_count = 0
+    quick_reply_count = 0
+    for body in bodies:
+        payload = body.get("message")
+        if not isinstance(payload, dict):
+            continue
+        quick = payload.get("quick_replies")
+        if isinstance(quick, list):
+            quick_reply_count += len(quick)
+        elements = _template_elements(payload)
+        if elements:
+            for element in elements:
+                if isinstance(element, dict) and isinstance(element.get("buttons"), list):
+                    button_count += len(element["buttons"])
+
+    return button_count < len(message.buttons) or quick_reply_count < len(message.quick_replies)
+
+
 def _body(recipient: dict[str, Any], message: dict[str, Any], tag: str | None) -> dict[str, Any]:
     """One Send API request body.
 
@@ -810,7 +833,10 @@ class InstagramAdapter(Adapter):
         rendered = downgrade(outbound, self.capabilities)
         bodies: list[dict[str, Any]] = []
         for message in rendered.messages:
-            bodies.extend(wire_messages(recipient, message))
+            message_bodies = wire_messages(recipient, message)
+            if _controls_unrenderable(message, message_bodies):
+                return SendResult(status=SendStatus.FAILED, error="controls_unrenderable")
+            bodies.extend(message_bodies)
         if not bodies:
             # Nothing sendable survived. Reported rather than silently counted as
             # sent, so contract 1's message row says what happened.

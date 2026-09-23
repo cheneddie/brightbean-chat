@@ -14,6 +14,7 @@ from apps.channels.events import (
     Card,
     CardBlock,
     GalleryBlock,
+    LinkBlock,
     MediaBlock,
     OutboundMessage,
     QuickReply,
@@ -24,6 +25,7 @@ from apps.messaging.rendering import outbound_from_body
 SHAPES = {
     "empty": OutboundMessage(),
     "text": OutboundMessage(blocks=(TextBlock(text="hello"),)),
+    "link": OutboundMessage(blocks=(LinkBlock(url="https://x.test/docs", label="Docs"),)),
     "media": OutboundMessage(blocks=(MediaBlock(kind="image", url="https://x.test/a.png", caption="cap"),)),
     "buttons": OutboundMessage(
         blocks=(TextBlock(text="pick"),),

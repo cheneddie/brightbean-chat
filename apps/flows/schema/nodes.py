@@ -217,6 +217,14 @@ register_defs(
         {"type": f.const("text"), "text": f.string(min_length=1, max_length=4096)},
         required=["type", "text"],
     ),
+    block_link=f.obj(
+        {
+            "type": f.const("link"),
+            "url": f.string(min_length=1, max_length=2000),
+            "label": f.string(max_length=200),
+        },
+        required=["type", "url"],
+    ),
     block_media={
         **f.obj(
             {
@@ -240,6 +248,7 @@ register_defs(
         "type",
         {
             "text": "block_text",
+            "link": "block_link",
             "image": "block_media",
             "audio": "block_media",
             "video": "block_media",

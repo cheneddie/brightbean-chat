@@ -77,7 +77,7 @@ describe("the generic renderer alone", () => {
   });
 
   it("offers all seven message-block kinds, over four underlying shapes", () => {
-    // discriminator.mapping has seven keys but oneOf has four branches, because
+    // discriminator.mapping has eight keys but oneOf has five branches, because
     // image/audio/video/file all map to block_media. Enumerating branches would
     // silently lose three kinds.
     withoutOverrides();
@@ -85,11 +85,11 @@ describe("the generic renderer alone", () => {
 
     const chooser = screen.getByLabelText("Message blocks") as HTMLSelectElement;
     const values = within(chooser).getAllByRole("option").map((option) => (option as HTMLOptionElement).value);
-    for (const kind of ["text", "image", "audio", "video", "file", "card", "gallery"]) {
+    for (const kind of ["text", "link", "image", "audio", "video", "file", "card", "gallery"]) {
       expect(values).toContain(kind);
     }
-    // Seven tags, four underlying $defs branches.
-    expect(values.filter(Boolean)).toHaveLength(7);
+    // Eight tags, five underlying $defs branches.
+    expect(values.filter(Boolean)).toHaveLength(8);
   });
 });
 

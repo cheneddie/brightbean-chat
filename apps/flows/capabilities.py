@@ -43,7 +43,7 @@ __all__ = [
 #: that a platform "supports" ``max_text_len`` or ``inbound``, which are not
 #: block types at all. ``test_capabilities.py`` asserts this stays equal to the
 #: set the schema's message_block union declares, so the two cannot drift.
-BLOCK_TYPES = frozenset({"text", "image", "audio", "video", "file", "card", "gallery"})
+BLOCK_TYPES = frozenset({"text", "link", "image", "audio", "video", "file", "card", "gallery"})
 
 
 @dataclass(frozen=True)
@@ -86,6 +86,8 @@ class Capabilities:
         """
         if block_type not in BLOCK_TYPES:
             return False
+        if block_type == "link":
+            return self.text
         return bool(getattr(self, block_type, False))
 
 
