@@ -7,10 +7,12 @@ import pytest
 from django.utils import timezone
 
 from apps.channels.events import OutboundMessage, SendResult, SendStatus, TextBlock
+from apps.channels.models import ChannelConnection
 from apps.channels.providers.exceptions import APIError
 from apps.channels.tests.fake_adapter import registered
 from apps.common.platforms import Platform
 from apps.contacts.services import create_contact
+from apps.flows.models import HandledComment
 from apps.messaging import handlers, services
 from apps.messaging.codes import Denial, Failure
 from apps.messaging.handlers import MAX_SEND_ATTEMPTS
@@ -169,6 +171,65 @@ class TestConnectionLifecycle:
         assert adapter.sends == []
         assert message.status == MessageStatus.FAILED
         assert message.error == Denial.CONNECTION_INACTIVE
+
+
+class TestPrivateReplyRetry:
+    def test_spent_claim_cannot_bypass_window_on_retry(self, tenancy: Any, contact: Any) -> None:
+        connection = ChannelConnection.objects.create(
+            workspace=tenancy.workspace,
+            platform=Platform.INSTAGRAM,
+            display_name="@shop",
+            external_id="ig-private-retry",
+        )
+        identity = ContactChannelIdentity.objects.create(
+            contact=contact,
+            channel_connection=connection,
+            platform=Platform.INSTAGRAM,
+            platform_user_id="ig-user-1",
+            opt_in=True,
+            opt_in_at=timezone.now(),
+            opt_in_source=OptInSource.COMMENT,
+            last_inbound_at=None,
+            window_expires_at=None,
+        )
+        claim = HandledComment.objects.create(
+            workspace=tenancy.workspace,
+            channel_connection=connection,
+            comment_id="comment-retry-1",
+            post_id="post-retry-1",
+            commenter_ref=identity.platform_user_id,
+            contact=contact,
+            commented_at=timezone.now(),
+        )
+        outbound = OutboundMessage(
+            blocks=(TextBlock(text="one-time reply"),),
+            private_reply_claim_id=str(claim.pk),
+        )
+
+        with registered(Platform.INSTAGRAM) as adapter:
+            adapter.send = unavailable  # type: ignore[method-assign,assignment]
+            message = services.send_outbound(
+                workspace=tenancy.workspace,
+                contact=contact,
+                connection=connection,
+                outbound=outbound,
+                source="automation",
+                idempotency_key="private-retry",
+            )
+
+        assert message.status == MessageStatus.QUEUED
+        action = pending_action()
+
+        claim.private_reply_sent_at = timezone.now()
+        claim.save(update_fields=["private_reply_sent_at", "updated_at"])
+
+        with registered(Platform.INSTAGRAM) as adapter:
+            run_retry(action)
+
+        message.refresh_from_db()
+        assert adapter.sends == []
+        assert message.status == MessageStatus.FAILED
+        assert message.error == Denial.OUTSIDE_WINDOW
 
 
 class TestRepeatedRateDeferral:

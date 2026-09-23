@@ -66,6 +66,7 @@ from django.utils import timezone
 # this module's result type out as NeedsTag, so the public name has to stay, and
 # the policy class is spelled out in full at every use instead.
 from apps.channels import policy as channel_policy
+from apps.channels.capabilities import capabilities_for
 from apps.channels.events import OutboundMessage
 from apps.messaging.codes import Denial, Grant
 from apps.messaging.models import ContactChannelIdentity, MessageSource
@@ -171,6 +172,8 @@ def _rules(
     source: str,
     outbound: OutboundMessage,
     now: datetime,
+    *,
+    private_reply: bool = False,
 ) -> tuple[_Rule, ...]:
     """SPEC §8's rules, in order, for one platform policy and one source."""
     rules = [
@@ -202,6 +205,13 @@ def _rules(
         # Before the window is even consulted: an open window does not make a
         # broadcast permissible on a platform that forbids them.
         return (*rules, _terminal(Denial.BROADCAST_NOT_ALLOWED.value))
+
+    if private_reply:
+        # A platform-specific caller already proved that this outbound names a
+        # valid, unspent one-time private-reply claim. This allowance replaces
+        # only the ordinary messaging-window requirement; opt-out, opt-in,
+        # connection and broadcast rules above still apply.
+        return (*rules, _terminal(Grant.PRIVATE_REPLY.value))
 
     if not policy.has_window():
         # outside_window is unreachable here and deliberately never read.
@@ -247,6 +257,7 @@ def can_send(
     outbound: OutboundMessage,
     *,
     now: datetime | None = None,
+    private_reply: bool = False,
 ) -> Decision:
     """May this message go out? SPEC §8, and the only place that decides.
 
@@ -256,7 +267,11 @@ def can_send(
     """
     now = now or timezone.now()
     policy = channel_policy.policy_for(identity.platform)
-    for rule in _rules(policy, source, outbound, now):
+    # Defense in depth: even an internal caller passing private_reply=True
+    # cannot grant this escape to a platform whose capabilities do not declare
+    # the one-time comment reply surface.
+    private_reply = private_reply and capabilities_for(identity.platform).comment_private_reply
+    for rule in _rules(policy, source, outbound, now, private_reply=private_reply):
         if rule.test(identity, now):
             return _decision(rule.code, policy, outbound)
     raise AssertionError("the terminal rule always matches")  # pragma: no cover

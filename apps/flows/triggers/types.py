@@ -133,7 +133,6 @@ COMMENT_PARENT_ID_KEY = "parent_comment_id"
 #: ``payload.text``. Checked as a fallback, so either shape works.
 COMMENT_TEXT_KEY = "comment_text"
 
-
 #: What a ``ref_url`` trigger's ``ref`` may contain.
 #:
 #: The intersection of what the three ref-carrying platforms accept, which is

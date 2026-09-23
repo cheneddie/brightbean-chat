@@ -18,7 +18,7 @@ import pytest
 from apps.contacts.errors import WorkspaceMismatchError
 from apps.flows import events
 from apps.flows.engine import Continue, End, Fail, FlowNotRunnableError, Wait, start_flow
-from apps.flows.models import ExecutionStatus, FlowExecution, StartedBy
+from apps.flows.models import ExecutionStatus, FlowExecution, HandledComment, StartedBy
 from apps.flows.services import archive_flow, create_flow, latest_version, save_draft
 from apps.flows.tests.support import (
     contact_for,
@@ -154,6 +154,72 @@ class TestRefusals:
 
         with pytest.raises(WorkspaceMismatchError, match="channel connection"):
             start_flow(contact, flow, started_by=StartedBy.API, connection=theirs)
+
+        assert not FlowExecution.objects.for_workspace(tenancy.workspace).exists()
+
+    def test_a_private_reply_claim_from_another_workspace_is_refused(self, tenancy, other_tenancy):
+        from django.utils import timezone
+
+        from apps.channels.models import ChannelConnection
+
+        ours = ChannelConnection.objects.create(
+            workspace=tenancy.workspace, platform="instagram", display_name="Ours", external_id="ig-ours"
+        )
+        theirs = ChannelConnection.objects.create(
+            workspace=other_tenancy.workspace, platform="instagram", display_name="Theirs", external_id="ig-theirs"
+        )
+        claim = HandledComment.objects.create(
+            workspace=other_tenancy.workspace,
+            channel_connection=theirs,
+            comment_id="foreign-comment",
+            post_id="foreign-post",
+            commenter_ref="foreign-user",
+            commented_at=timezone.now(),
+        )
+        flow = published_flow(tenancy.workspace, graph([node("a", "action", NOOP_ACTION)]))
+        contact = contact_for(tenancy.workspace)
+
+        with pytest.raises(WorkspaceMismatchError, match="claim belongs to a different workspace"):
+            start_flow(
+                contact,
+                flow,
+                started_by=StartedBy.API,
+                connection=ours,
+                _private_reply_claim=claim,
+            )
+
+        assert not FlowExecution.objects.for_workspace(tenancy.workspace).exists()
+
+    def test_a_private_reply_claim_from_another_connection_is_refused(self, tenancy):
+        from django.utils import timezone
+
+        from apps.channels.models import ChannelConnection
+
+        first = ChannelConnection.objects.create(
+            workspace=tenancy.workspace, platform="instagram", display_name="First", external_id="ig-first"
+        )
+        second = ChannelConnection.objects.create(
+            workspace=tenancy.workspace, platform="instagram", display_name="Second", external_id="ig-second"
+        )
+        claim = HandledComment.objects.create(
+            workspace=tenancy.workspace,
+            channel_connection=first,
+            comment_id="comment-1",
+            post_id="post-1",
+            commenter_ref="user-1",
+            commented_at=timezone.now(),
+        )
+        flow = published_flow(tenancy.workspace, graph([node("a", "action", NOOP_ACTION)]))
+        contact = contact_for(tenancy.workspace)
+
+        with pytest.raises(WorkspaceMismatchError, match="different channel connection"):
+            start_flow(
+                contact,
+                flow,
+                started_by=StartedBy.API,
+                connection=second,
+                _private_reply_claim=claim,
+            )
 
         assert not FlowExecution.objects.for_workspace(tenancy.workspace).exists()
 

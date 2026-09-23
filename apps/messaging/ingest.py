@@ -38,7 +38,7 @@ referral
 follow                 yes         **no**    **no**  no
 opt_out                yes         opts out  no      no
 comment                **no**      no        no      no
-comment, claimed       yes         yes       yes     no
+comment, claimed       yes         yes       no      no
 message_deleted        no          no        no      no (redacts one)
 delivery_status        no          no        no      no (updates one)
 =====================  ==========  ========  ======  ==================
@@ -71,10 +71,11 @@ claimed, which an adapter re-dispatches carrying
 :data:`PRIVATE_REPLY_CLAIMED_KEY`. That marker is why the amplifier stays shut —
 a claim is once per comment and once per commenter per post, so the identity
 count is bounded by the guard rather than by how viral the post went. Such an
-event gets an identity, a consent record stamped ``OptInSource.COMMENT``, and
-the messaging window, because the private reply is an ordinary outbound send and
-has to pass the same compliance chokepoint as any other (SPEC §8). It still
-writes **no** message row: their comment is not a DM they sent us.
+event gets an identity and a consent record stamped ``OptInSource.COMMENT``,
+but **no normal messaging window** and no ``last_inbound_at``: a public
+comment is not an inbound DM. The one private reply is authorized separately by
+the durable comment claim carried into the flow. It still writes **no** message
+row: their comment is not a DM they sent us.
 
 *A deletion redacts rather than removes.* SPEC §6.3 and §19 both require
 Instagram's ``message_deletions`` to "redact message body, keep row with status
@@ -166,12 +167,10 @@ ROUTING_PROCESSOR = "routing"
 #: Events that become a row in the thread.
 THREAD_EVENTS = frozenset({EventType.MESSAGE, EventType.POSTBACK, EventType.STORY_REPLY})
 
-#: Contact-authored activity that is not thread content. Opens the window.
-#:
-#: ``comment`` is in here for the claimed case only — :func:`_persist_one`
-#: refuses an unclaimed one before this set is consulted. See the module
-#: docstring for why that exception exists and why it is bounded.
-ACTIVITY_EVENTS = frozenset({EventType.STORY_MENTION, EventType.REFERRAL, EventType.COMMENT})
+#: Contact-authored activity that is not thread content and legitimately opens
+#: the ordinary messaging window. A public comment is deliberately excluded:
+#: its one private reply is a separate allowance, not a DM-window opener.
+ACTIVITY_EVENTS = frozenset({EventType.STORY_MENTION, EventType.REFERRAL})
 
 #: Creates an identity and nothing else — no consent, no window. See the table.
 CONTACT_ONLY_EVENTS = frozenset({EventType.FOLLOW})
@@ -179,7 +178,7 @@ CONTACT_ONLY_EVENTS = frozenset({EventType.FOLLOW})
 #: Every type that resolves an identity at all. A type outside this set either
 #: updates an existing row (``delivery_status``, ``message_deleted``) or is
 #: ignored.
-IDENTITY_EVENTS = THREAD_EVENTS | ACTIVITY_EVENTS | CONTACT_ONLY_EVENTS | {EventType.OPT_OUT}
+IDENTITY_EVENTS = THREAD_EVENTS | ACTIVITY_EVENTS | CONTACT_ONLY_EVENTS | {EventType.COMMENT, EventType.OPT_OUT}
 
 #: Where a claimed comment says so. Set by the adapter that took SPEC §10's
 #: guard, never by a parser: at parse time nothing knows yet whether the comment
@@ -395,14 +394,17 @@ def _persist_one(connection: Any, event: NormalizedEvent) -> None:
         # is documented here rather than defended against with a second table.
         return
 
-    _record_activity(
-        identity,
-        contact,
-        conversation,
-        now,
-        message_at=now if message else None,
-        opt_in_source=OptInSource.COMMENT if event.type == EventType.COMMENT else OptInSource.MESSAGE_IN,
-    )
+    if event.type == EventType.COMMENT:
+        _record_claimed_comment_activity(identity, contact, now)
+    else:
+        _record_activity(
+            identity,
+            contact,
+            conversation,
+            now,
+            message_at=now if message else None,
+            opt_in_source=OptInSource.MESSAGE_IN,
+        )
 
     # The organization's contact meter. ManyChat's definition, which this plan
     # copies, counts a person as active when messages are "sent **or
@@ -678,6 +680,25 @@ def _clean(value: Any, limit: int) -> str:
     if not isinstance(value, str):
         return ""
     return value.replace("\x00", "")[:limit]
+
+
+def _record_claimed_comment_activity(
+    identity: ContactChannelIdentity,
+    contact: Any,
+    now: Any,
+) -> None:
+    """Record a claimed public comment without manufacturing a DM window.
+
+    The comment grants exactly one private reply through its HandledComment row.
+    It does not prove the person sent a private message, so neither
+    last_inbound_at nor window_expires_at may move here.
+    """
+    changed = record_consent(identity, source=OptInSource.COMMENT, now=now)
+    if changed:
+        identity.save(update_fields=[*changed, "updated_at"])
+
+    contact.last_interaction_at = now
+    contact.save(update_fields=["last_interaction_at", "updated_at"])
 
 
 def _record_activity(

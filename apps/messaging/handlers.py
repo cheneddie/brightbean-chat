@@ -195,7 +195,13 @@ def handle_send_retry(payload: dict[str, Any], action: ScheduledAction) -> None:
     """
     from apps.messaging.lookup import provider_message_id
     from apps.messaging.rendering import outbound_from_body
-    from apps.messaging.services import _dispatch, _finalize, _finalize_if_queued, _identity_for
+    from apps.messaging.services import (
+        _dispatch,
+        _finalize,
+        _finalize_if_queued,
+        _identity_for,
+        _validated_private_reply,
+    )
 
     message = _load(payload, action)
     if message is None or message.status != MessageStatus.QUEUED:
@@ -235,7 +241,14 @@ def handle_send_retry(payload: dict[str, Any], action: ScheduledAction) -> None:
         )
 
     outbound = outbound_from_body(message.body)
-    decision = can_send(identity, message.source, outbound)
+    outbound, private_reply = _validated_private_reply(
+        message.workspace_id,
+        conversation.contact,
+        connection,
+        identity,
+        outbound,
+    )
+    decision = can_send(identity, message.source, outbound, private_reply=private_reply)
     if not isinstance(decision, Allowed):
         # Same reasoning as the NO_IDENTITY check above: still pre-claim,
         # still a window `withdraw_send` can match.

@@ -103,9 +103,24 @@ class TestContractFieldsAreExactlyAsWritten:
     #: identify it either.
     BILLING_FIELDS = {"counts_segments"}
 
+    #: Also beyond §6.1. Comment private reply is a delivery capability rather
+    #: than a normal proactive-send/window rule: only a platform that declares
+    #: it may use a claimed public comment as a one-time send allowance.
+    COMMENT_DELIVERY_FIELDS = {"comment_private_reply"}
+
     def test_capabilities_carries_every_spec_6_1_flag(self) -> None:
         fields = {f.name for f in dataclasses.fields(Capabilities)}
-        assert fields == (self.SPEC_6_1_FLAGS | self.MEDIA_CEILING_FIELDS | self.RENDERING_FIELDS | self.BILLING_FIELDS)
+        assert fields == (
+            self.SPEC_6_1_FLAGS
+            | self.MEDIA_CEILING_FIELDS
+            | self.RENDERING_FIELDS
+            | self.BILLING_FIELDS
+            | self.COMMENT_DELIVERY_FIELDS
+        )
+
+    def test_only_instagram_declares_comment_private_reply_today(self) -> None:
+        declared = {platform for platform in Platform.values if capabilities_for(platform).comment_private_reply}
+        assert declared == {Platform.INSTAGRAM}
 
     def test_only_a_segment_billed_platform_declares_it(self) -> None:
         """SPEC §6.6 names one: SMS. A second would need its own §6 subsection."""

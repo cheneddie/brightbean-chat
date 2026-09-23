@@ -29,6 +29,7 @@ class Grant(StrEnum):
 
     NO_WINDOW = "no_window"
     IN_WINDOW = "in_window"
+    PRIVATE_REPLY = "private_reply"
     HUMAN_AGENT = "human_agent"
     TAG_SUPPLIED = "tag_supplied"
     TEMPLATE_SUPPLIED = "template_supplied"
@@ -57,6 +58,8 @@ class Failure(StrEnum):
     PROVIDER_UNAVAILABLE = "provider_unavailable"
     RATE_LIMITED = "rate_limited"
     RATE_DEFERRED = "rate_deferred"
+    PRIVATE_REPLY_MULTIPART = "private_reply_multipart"
+    PRIVATE_REPLY_UNAVAILABLE = "private_reply_unavailable"
     RETRIES_EXHAUSTED = "retries_exhausted"
     RETRY_UNSCHEDULABLE = "retry_unschedulable"
     # The one code here that is not the platform's doing: the caller retracted a
@@ -89,6 +92,7 @@ class Limit(StrEnum):
 REASON_COPY: dict[str, str] = {
     Grant.NO_WINDOW: "This platform has no messaging window.",
     Grant.IN_WINDOW: "The contact messaged recently, so the window is open.",
+    Grant.PRIVATE_REPLY: "Sent as the one private reply allowed for a claimed public comment.",
     Grant.HUMAN_AGENT: "Sent under the human-agent allowance, available to inbox replies only.",
     Grant.TAG_SUPPLIED: "Sent outside the window under an approved message tag.",
     Grant.TEMPLATE_SUPPLIED: "Sent outside the window using an approved template.",
@@ -108,6 +112,8 @@ REASON_COPY: dict[str, str] = {
     Failure.PROVIDER_UNAVAILABLE: "The platform could not be reached.",
     Failure.RATE_LIMITED: "The platform is throttling this connection.",
     Failure.RATE_DEFERRED: "Waiting for this connection's send rate to allow another message.",
+    Failure.PRIVATE_REPLY_MULTIPART: "A comment private reply must render as exactly one platform message.",
+    Failure.PRIVATE_REPLY_UNAVAILABLE: "The one-time comment private-reply allowance is no longer available.",
     Failure.RETRIES_EXHAUSTED: "Gave up after retrying this send.",
     Failure.RETRY_UNSCHEDULABLE: "The send failed and another attempt could not be scheduled.",
     Failure.WITHDRAWN: "The work that queued this message was cancelled before it was sent.",

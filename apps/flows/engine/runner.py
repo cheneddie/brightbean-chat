@@ -142,6 +142,7 @@ def start_flow(
     connection: Any = None,
     preview: bool | None = None,
     _carry_blocks: int = 0,
+    _private_reply_claim: Any = None,
 ) -> FlowExecution:
     """Begin ``flow`` for ``contact`` and run it until it pauses or ends.
 
@@ -176,6 +177,14 @@ def start_flow(
         # send — the connection goes to `send_outbound` verbatim.
         raise WorkspaceMismatchError("That channel connection belongs to a different workspace than the flow.")
 
+    if _private_reply_claim is not None:
+        if connection is None:
+            raise WorkspaceMismatchError("A private-reply claim must stay on the channel connection that received it.")
+        if _private_reply_claim.workspace_id != flow.workspace_id:
+            raise WorkspaceMismatchError("That private-reply claim belongs to a different workspace than the flow.")
+        if _private_reply_claim.channel_connection_id != connection.pk:
+            raise WorkspaceMismatchError("That private-reply claim belongs to a different channel connection.")
+
     version = _resolve_version(flow, flow_version)
     graph = Graph(version.graph_json)
     entry = graph.entry_node_id()
@@ -193,6 +202,7 @@ def start_flow(
             flow_version=version,
             contact=contact,
             channel_connection=connection,
+            private_reply_claim=_private_reply_claim,
             status=ExecutionStatus.RUNNING,
             current_node_id=entry,
             variables=dict(variables or {}),

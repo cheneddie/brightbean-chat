@@ -233,6 +233,19 @@ class FlowExecution(ContactScopedModel):
         related_name="flow_executions",
     )
 
+    #: The one durable public-comment claim that may authorize the execution's
+    #: first Instagram private reply. Flow authors cannot set or mutate this
+    #: field; trigger routing writes it when a claimed comment starts the flow.
+    #: Keeping it out of variables is a security boundary because External
+    #: Request nodes may write arbitrary user-authored variable names.
+    private_reply_claim = models.ForeignKey(
+        "flows.HandledComment",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="+",
+    )
+
     status = models.CharField(max_length=16, choices=ExecutionStatus.choices, default=ExecutionStatus.RUNNING)
 
     # The node about to run, or — while waiting — the node that is waiting.
@@ -297,6 +310,19 @@ class FlowExecution(ContactScopedModel):
             update_fields = kwargs.get("update_fields")
             if update_fields:
                 kwargs["update_fields"] = set(update_fields) | {"flow"}
+
+        if self.private_reply_claim_id is not None:
+            claim = self.private_reply_claim
+            if claim is None:
+                raise WorkspaceMismatchError("The private-reply claim no longer exists.")
+            contact_workspace_id = self.contact.workspace_id
+            if claim.workspace_id != contact_workspace_id:
+                raise WorkspaceMismatchError(
+                    "The private-reply claim belongs to a different workspace than the contact."
+                )
+            if self.channel_connection_id is None or claim.channel_connection_id != self.channel_connection_id:
+                raise WorkspaceMismatchError("The private-reply claim belongs to a different channel connection.")
+
         super().save(*args, **kwargs)
 
     @property

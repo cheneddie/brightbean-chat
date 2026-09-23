@@ -789,14 +789,22 @@ class InstagramAdapter(Adapter):
 
         The first message to a contact who reached us through a comment goes out
         as a **private reply**, addressed by comment id rather than by user id —
-        see :func:`_pending_private_reply`.
+        see :func:`_private_reply_claim`.
         """
         recipient_id = _platform_id(getattr(identity, "platform_user_id", "") or "")
         if not recipient_id:
             return SendResult(status=SendStatus.FAILED, error="no_recipient")
 
         token = access_token(connection)
-        claimed = _pending_private_reply(connection, identity)
+        claim_id = str(getattr(outbound, "private_reply_claim_id", "") or "").strip()
+        claimed = _private_reply_claim(connection, identity, claim_id)
+        if claim_id and claimed is None:
+            # The messaging chokepoint already validated this claim, but it can
+            # become spent or expire before the provider call. Never fall back
+            # to an ordinary DM here: that would turn a lost one-time allowance
+            # into an out-of-window proactive send.
+            return SendResult(status=SendStatus.FAILED, error="private_reply_unavailable")
+
         recipient: dict[str, Any] = {"comment_id": claimed.comment_id} if claimed is not None else {"id": recipient_id}
 
         rendered = downgrade(outbound, self.capabilities)
@@ -808,24 +816,21 @@ class InstagramAdapter(Adapter):
             # sent, so contract 1's message row says what happened.
             return SendResult(status=SendStatus.FAILED, error="empty_message")
 
-        if claimed is not None and len(bodies) > 1:
-            logger.info("Instagram: only the first message of a %s-part reply is a private reply.", len(bodies))
+        if claimed is not None and len(bodies) != 1:
+            # A public comment grants one private reply, not a bridge into the
+            # ordinary DM window. Sending body #2 by user id before the person
+            # actually replies would be a proactive send Meta does not permit.
+            return SendResult(status=SendStatus.FAILED, error="private_reply_multipart")
 
         provider_message_id = ""
-        for index, body in enumerate(bodies):
-            if index and claimed is not None:
-                # Meta allows exactly one private reply per comment, so only the
-                # first message is addressed that way. The rest go to the person
-                # — which works precisely because the private reply opened the
-                # thread a moment ago.
-                body = {**body, "recipient": {"id": recipient_id}}
+        for body in bodies:
             try:
                 result = call(token, "me/messages", body)
             except APIError as exc:
                 self._handle_send_error(connection, recipient_id, exc)
                 raise
             provider_message_id = _text(result.get("message_id"), MAX_PLATFORM_ID_CHARS) or provider_message_id
-            if index == 0 and claimed is not None:
+            if claimed is not None:
                 _spend_private_reply(claimed, identity, result)
         return SendResult(status=SendStatus.SENT, provider_message_id=provider_message_id)
 
@@ -1330,96 +1335,41 @@ def _mention_event(
 # ---------------------------------------------------------------------------
 
 
-def _pending_private_reply(connection: ChannelConnection, identity: Any) -> Any:
-    """The claimed comment this contact's first message is the reply to, or None.
+def _private_reply_claim(connection: ChannelConnection, identity: Any, claim_id: str) -> Any:
+    """The exact still-valid private-reply claim named by the outbound message.
 
-    Meta will not accept an ordinary DM to somebody who has never messaged the
-    account. What it accepts is a **private reply**, addressed by comment id,
-    once per comment and within seven days — so the flow's first message has to
-    go out that way, and every message after it by user id.
-
-    Deciding it here rather than threading a flag through
-    ``OutboundMessage`` keeps the platform detail in the platform module: the
-    flow engine sends a message to a contact and does not need to learn that
-    Instagram has two kinds of recipient.
-
-    **Only when there is no other way to reach them.** An unanswered claim is not
-    on its own a licence to readdress a send: a claim whose flow never started —
-    no publishable version, a refused first send — sits open for seven days, and
-    without this check an agent's inbox reply days later would go out as that
-    comment's one private reply, carrying Meta's auto-appended link to the post
-    and spending an allowance the agent knew nothing about. So the claim is
-    consumed only when the contact has never messaged the account
-    (:func:`_never_messaged_us`), which is the one case where a private reply is
-    both correct and the only form Meta will accept.
-
-    Two indexed lookups on the send path, and no cheaper pre-filter in front of
-    the first. The obvious one — gating on ``identity.last_inbound_at`` — is
-    wrong for the reason :func:`_never_messaged_us` gives. ``HandledComment``
-    carries a partial index over exactly the unanswered rows
-    (:class:`apps.flows.models.HandledComment`), and the second lookup only runs
-    once the first has found something.
-
-    Never raises. A private reply is a refinement of an ordinary send; a failure
-    to look one up must not fail the send itself.
+    The id reaches here only after the messaging chokepoint validated it, and
+    is checked again because the claim can expire or be spent in the gap before
+    the provider call. No "latest unanswered comment" heuristic is allowed.
     """
     address = _platform_id(getattr(identity, "platform_user_id", "") or "")
-    if not address:
+    if not address or not claim_id:
         return None
     try:
+        from django.core.exceptions import ValidationError
+
         from apps.flows.models import HandledComment
         from apps.flows.triggers import guards
 
-        rows = (
+        row = (
             HandledComment.objects.for_workspace(connection.workspace_id)
             .filter(
+                pk=claim_id,
                 channel_connection=connection,
                 commenter_ref=address,
                 private_reply_sent_at__isnull=True,
             )
-            .order_by("-commented_at")[:5]
+            .first()
         )
-        candidate = next((row for row in rows if guards.may_private_reply(row)), None)
-        if candidate is None or not _never_messaged_us(connection, identity):
-            return None
-        return candidate
-    except Exception:
-        logger.warning("Instagram: could not check for a pending private reply on connection %s.", connection.pk)
-    return None
+    except (TypeError, ValueError, ValidationError):
+        return None
 
-
-def _never_messaged_us(connection: ChannelConnection, identity: Any) -> bool:
-    """Has this contact never sent this account a **message**?
-
-    The question a private reply actually turns on. Meta refuses an ordinary DM
-    to somebody who has not written first, and what grants that permission is an
-    inbound *message* — not a comment, and not anything we sent them.
-
-    So it is asked of the inbound message rows, and neither of the two nearer
-    signals would do. ``last_inbound_at`` is set by a claimed comment as well as
-    by a DM, so it answers False for exactly the person who needs a private
-    reply. "Have we sent them anything" is a different question again: a contact
-    who wrote to us months ago and was never replied to still takes an ordinary
-    DM, and contract 1 inserts the row being dispatched *before* calling the
-    adapter, so that check also sees the message it is being asked about.
-
-    Only reached once a pending claim has been found, so an established thread
-    never pays for it.
-    """
-    from apps.messaging.models import Message, MessageDirection
-
+    if row is None:
+        return None
     contact_id = getattr(identity, "contact_id", None)
-    if contact_id is None:
-        return True
-    return not (
-        Message.objects.for_workspace(connection.workspace_id)
-        .filter(
-            channel_connection=connection,
-            conversation__contact_id=contact_id,
-            direction=MessageDirection.IN,
-        )
-        .exists()
-    )
+    if row.contact_id is not None and contact_id is not None and row.contact_id != contact_id:
+        return None
+    return row if guards.may_private_reply(row) else None
 
 
 def _spend_private_reply(row: Any, identity: Any, result: dict[str, Any]) -> None:
@@ -1482,10 +1432,11 @@ def _respond_to_comment(context: Any, trigger: Any, row: Any) -> None:
 
     ``open_thread`` is the other thing it carries, and it is false for a
     commenter we already know. The re-dispatch exists only to create the
-    contact, the consent record and the messaging window; when all three already
-    exist the routing stage has started the flow synchronously and dispatching
-    again would start it a second time. The public reply is queued either way —
-    an author who configured one wants it for repeat customers too.
+    contact and consent audit needed to route the one-time private reply; it
+    deliberately does not create a normal messaging window. When a contact
+    already exists the routing stage starts the flow synchronously and
+    dispatching again would start it a second time. The public reply is queued
+    either way — an author who configured one wants it for repeat customers too.
     """
     from apps.queueing.registry import schedule as queue_schedule
 
@@ -1538,20 +1489,20 @@ def _answer_comment(payload: dict[str, Any], action: Any) -> None:
     connection = row.channel_connection
     if connection.platform != Platform.INSTAGRAM.value:
         return
-    if row.private_reply_sent_at is not None:
-        # A redelivery of an action whose private reply already went out.
-        logger.info("Instagram: comment row %s has already been answered.", row.pk)
-        return
-    if payload.get("open_thread", True) and not guards.may_private_reply(row):
-        # Past the seven-day deadline, so there is no thread to open. Checked
-        # only on the path that would open one: a commenter we already know has
-        # a thread already, and their public reply does not expire with the
-        # private-reply window.
-        logger.info("Instagram: comment row %s is past its private-reply deadline.", row.pk)
-        return
-
+    # Public and private replies have independent idempotency guards. Always
+    # give the public side its chance first: for a known commenter whose normal
+    # DM window is closed, the flow may spend the one-time private reply
+    # synchronously before this queued handler runs. Returning on that fact
+    # would incorrectly suppress the configured public reply.
     config = row.trigger.config_json if isinstance(row.trigger.config_json, dict) else {}
     _send_public_reply(connection, row, config)
+
+    if row.private_reply_sent_at is not None:
+        logger.info("Instagram: comment row %s has already spent its private reply.", row.pk)
+        return
+    if payload.get("open_thread", True) and not guards.may_private_reply(row):
+        logger.info("Instagram: comment row %s is past its private-reply deadline.", row.pk)
+        return
     if payload.get("open_thread", True):
         _open_thread(connection, row, payload)
 
@@ -1597,14 +1548,12 @@ def _open_thread(connection: ChannelConnection, row: Any, payload: dict[str, Any
     This is the step that makes comment-to-DM work at all, and it is worth
     saying why it is a re-dispatch rather than four direct calls.
 
-    ``apps.messaging.ingest`` deliberately creates no contact for a comment — one
-    viral post would otherwise be a contact-spam amplifier — and it is also the
-    single write site for ``identity.window_expires_at`` (ROADMAP contract 3,
-    enforced by an AST scan). So the contact, the consent record and the
-    messaging window that lets the reply through the compliance engine can only
-    be created *there*. The marker below is what tells it this particular comment
-    has already been claimed by SPEC §10's once-per-comment guard, which is what
-    makes creating one identity for it safe.
+    ``apps.messaging.ingest`` deliberately creates no contact for an ordinary
+    comment — one viral post would otherwise be a contact-spam amplifier. The
+    claimed-comment marker below lets ingest create the contact and consent
+    audit needed for routing without pretending the public comment was an
+    inbound DM: ``last_inbound_at`` and ``window_expires_at`` stay unset. The
+    durable comment claim is what grants exactly one private reply instead.
 
     Routing then matches the comment trigger a second time — with a contact in
     hand this time — and starts the flow, so the flow's first message *is* the

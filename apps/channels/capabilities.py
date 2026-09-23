@@ -81,6 +81,10 @@ class Capabilities:
     interaction_is_exclusive: bool = False
     proactive_send: bool = False
     broadcast_allowed: bool = False
+    #: True when a public comment can authorize one platform private reply
+    #: without opening the ordinary messaging window. This is a capability,
+    #: not consent: the send pipeline still validates the exact durable claim.
+    comment_private_reply: bool = False
 
     # -- limits -------------------------------------------------------------
     #: 0 means the platform has no button/quick-reply support at all, which the
@@ -217,6 +221,7 @@ CAPABILITIES: dict[str, Capabilities] = {
         typing_indicator=True,
         window_hours=24,
         tags_supported=(_HUMAN_AGENT,),
+        comment_private_reply=True,
         max_buttons=3,
         max_quick_replies=13,
         max_text_len=1000,
