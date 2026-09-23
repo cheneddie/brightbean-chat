@@ -2,7 +2,8 @@
 
 Status: **core implementation already exists upstream; product acceptance strengthened in this fork**
 
-Base: `dev/D1-instagram-oauth`
+Base: `main`
+Tracking issue: `#6`
 
 ## Product contract
 
@@ -97,8 +98,8 @@ No second comment engine should be built. Future D2 changes should target only d
 
 ## Required before D2 merge
 
-- D0 accepted.
-- D1 accepted.
+- D0 accepted. ✅
+- D1 accepted. ✅
 - Fork Actions enabled and CI/security suite green.
 - Instagram comment test suite green.
 - Webhook signature/dedupe tests green.
