@@ -126,6 +126,42 @@ class TestAnOpenWindow:
         assert not isinstance(decide(identity(platform, window_open=None), "automation"), Allowed)
 
 
+class TestPrivateReplyAllowance:
+    def test_instagram_private_reply_bypasses_only_the_window(self) -> None:
+        result = can_send(
+            identity(Platform.INSTAGRAM, window_open=None, last_inbound_days=None),
+            "automation",
+            TEXT,
+            now=NOW,
+            private_reply=True,
+        )
+        assert isinstance(result, Allowed)
+        assert result.code == Grant.PRIVATE_REPLY
+
+    @pytest.mark.parametrize(
+        ("ident", "code"),
+        [
+            (identity(Platform.INSTAGRAM, opted_out=True, window_open=None), Denial.OPTED_OUT),
+            (identity(Platform.INSTAGRAM, opt_in=False, window_open=None), Denial.NO_OPT_IN),
+            (identity(Platform.INSTAGRAM, connection=False, window_open=None), Denial.NO_CONNECTION),
+        ],
+    )
+    def test_private_reply_does_not_bypass_core_compliance(self, ident: ContactChannelIdentity, code: str) -> None:
+        result = can_send(ident, "automation", TEXT, now=NOW, private_reply=True)
+        assert isinstance(result, Blocked)
+        assert result.code == code
+
+    def test_private_reply_flag_does_not_grant_other_platforms_an_escape(self) -> None:
+        result = can_send(
+            identity(Platform.MESSENGER, window_open=None, last_inbound_days=None),
+            "automation",
+            TEXT,
+            now=NOW,
+            private_reply=True,
+        )
+        assert not isinstance(result, Allowed)
+
+
 class TestOutsideTheWindow:
     """The golden table, from SPEC §8's own prose."""
 

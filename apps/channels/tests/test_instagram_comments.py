@@ -28,8 +28,8 @@ from apps.channels.providers.instagram import COMMENT_REPLY_ACTION
 from apps.channels.providers.meta_common import SIGNATURE_HEADER
 from apps.channels.tests.instagram_support import IG_USER_ID, at_now, fake_graph, load_delivery, sign
 from apps.flows.models import Flow, FlowExecution, HandledComment, Trigger, TriggerType
+from apps.flows.tests.support import edge, node
 from apps.flows.tests.support import graph as flow_graph
-from apps.flows.tests.support import node
 from apps.flows.triggers import comments as comment_responders
 from apps.messaging.models import ContactChannelIdentity, Message, MessageDirection, OptInSource
 from apps.queueing.models import ScheduledAction
@@ -142,14 +142,15 @@ class TestCommentToDm:
         assert message["recipient"] == {"comment_id": COMMENT_ID}
         assert message["message"]["text"] == "It is 40 EUR, shipped."
 
-        # 3. The DM thread now exists, with consent recorded as what it was.
+        # 3. The identity exists and records why the one-time reply was
+        #    permitted, but a public comment is not an inbound DM and therefore
+        #    must not manufacture the ordinary messaging window.
         identity = ContactChannelIdentity.objects.for_workspace(tenancy.workspace).get()
         assert identity.platform_user_id == IG_USER_ID
         assert identity.opt_in is True
         assert identity.opt_in_source == OptInSource.COMMENT
-        # The compliance window is what lets the reply through the chokepoint at
-        # all: SPEC §8 gates every send on it, comment or not.
-        assert identity.window_expires_at is not None
+        assert identity.last_inbound_at is None
+        assert identity.window_expires_at is None
 
         # 4. The guard is spent, and it names the contact the thread belongs to.
         row = HandledComment.objects.for_workspace(tenancy.workspace).get()
@@ -244,15 +245,14 @@ class TestCommentToDm:
         assert api.calls == []
         assert not HandledComment.objects.for_workspace(tenancy.workspace).exists()
 
-    def test_a_reply_queued_before_the_deadline_is_refused_after_it(
+    def test_a_reply_queued_before_the_deadline_loses_only_the_private_reply_after_it(
         self,
         client: Client,
         tenancy: Tenancy,
         instagram_connection: ChannelConnection,
         comment_trigger: Trigger,
     ) -> None:
-        """The queue is durable and the deadline is not ours. A row that waited
-        out the window must not send."""
+        """The private-reply deadline must not suppress an independent public reply."""
         with fake_graph() as api:
             deliver(client, at_now(load_delivery("comment")))
             row = HandledComment.objects.for_workspace(tenancy.workspace).get()
@@ -261,7 +261,11 @@ class TestCommentToDm:
             )
             run_queued()
 
-        assert api.calls == []
+        assert api.bodies(f"{COMMENT_ID}/replies") == [{"message": "Sent you a DM!"}]
+        assert api.message_bodies() == []
+        row.refresh_from_db()
+        assert row.public_reply_sent_at is not None
+        assert row.private_reply_sent_at is None
 
     def test_like_comment_is_configured_and_never_called(
         self,
@@ -350,6 +354,30 @@ class TestACommenterWeAlreadyKnow:
         # An ordinary DM: the thread is already open, so nothing is a private reply.
         assert replies[0]["recipient"] == {"id": IG_USER_ID}
         assert FlowExecution.objects.for_workspace(tenancy.workspace).count() == 1
+
+    def test_known_commenter_with_closed_window_gets_private_and_public_reply(
+        self,
+        client: Client,
+        tenancy: Tenancy,
+        instagram_connection: ChannelConnection,
+        comment_trigger: Trigger,
+    ) -> None:
+        self._with_a_dm_thread(client, tenancy)
+        identity = ContactChannelIdentity.objects.for_workspace(tenancy.workspace).get()
+        identity.window_expires_at = timezone.now() - timedelta(minutes=1)
+        identity.save(update_fields=["window_expires_at", "updated_at"])
+
+        with fake_graph() as api:
+            deliver(client, at_now(load_delivery("comment")))
+            run_queued()
+
+        replies = [body for body in api.message_bodies() if body["message"].get("text") == "It is 40 EUR, shipped."]
+        assert len(replies) == 1
+        assert replies[0]["recipient"] == {"comment_id": COMMENT_ID}
+        assert api.bodies(f"{COMMENT_ID}/replies") == [{"message": "Sent you a DM!"}]
+        row = HandledComment.objects.for_workspace(tenancy.workspace).get()
+        assert row.private_reply_sent_at is not None
+        assert row.public_reply_sent_at is not None
 
     def test_their_second_comment_on_the_post_is_refused(
         self,
@@ -513,10 +541,11 @@ class TestMatching:
         with fake_graph():
             _open_thread(instagram_connection, row, {"comment_text": "PRICE please"})
 
-        # The contact, the consent record and the window all exist — the private
-        # reply needs every one of them to clear SPEC §8's chokepoint.
+        # The contact and consent audit exist, but a public comment must not
+        # manufacture a normal DM window merely so the private reply can pass.
         identity = ContactChannelIdentity.objects.for_workspace(tenancy.workspace).get()
-        assert identity.window_expires_at is not None
+        assert identity.window_expires_at is None
+        assert identity.last_inbound_at is None
         # The thread does not.
         assert not Conversation.objects.for_workspace(tenancy.workspace).exists()
 
@@ -531,6 +560,54 @@ class TestMatching:
 
 
 @pytest.mark.usefixtures("instagram_app", "real_pipeline")
+class TestPrivateReplyBoundary:
+    def test_a_second_flow_send_is_blocked_until_the_person_replies(
+        self,
+        client: Client,
+        tenancy: Tenancy,
+        instagram_connection: ChannelConnection,
+        comment_flow: Flow,
+        comment_trigger: Trigger,
+    ) -> None:
+        from apps.flows.services import publish, save_draft
+
+        two_messages = flow_graph(
+            [
+                node("first", "send_message", {"blocks": [{"type": "text", "text": "First"}]}),
+                node("second", "send_message", {"blocks": [{"type": "text", "text": "Second"}]}),
+            ],
+            [edge("first", "default", "second")],
+        )
+        save_draft(comment_flow, two_messages)
+        publish(comment_flow)
+
+        with fake_graph() as api:
+            deliver(client, at_now(load_delivery("comment")))
+            run_queued()
+
+        # Only the one comment-addressed private reply reaches Meta. The second
+        # node is an ordinary DM and the person has not sent a DM yet.
+        assert [body["recipient"] for body in api.message_bodies()] == [{"comment_id": COMMENT_ID}]
+
+        outbound = list(
+            Message.objects.for_workspace(tenancy.workspace)
+            .filter(direction=MessageDirection.OUT)
+            .order_by("created_at")
+        )
+        assert [(row.status, row.error) for row in outbound] == [
+            ("sent", ""),
+            ("failed", "outside_window"),
+        ]
+
+        identity = ContactChannelIdentity.objects.for_workspace(tenancy.workspace).get()
+        assert identity.window_expires_at is None
+
+        handled = HandledComment.objects.for_workspace(tenancy.workspace).get()
+        execution = FlowExecution.objects.for_workspace(tenancy.workspace).get()
+        assert execution.private_reply_claim_id == handled.pk
+
+
+@pytest.mark.usefixtures("instagram_app", "real_pipeline")
 class TestAfterTheThreadOpens:
     def test_the_next_message_goes_to_the_person_not_the_comment(
         self,
@@ -539,8 +616,8 @@ class TestAfterTheThreadOpens:
         instagram_connection: ChannelConnection,
         comment_trigger: Trigger,
     ) -> None:
-        """Meta allows exactly one private reply per comment. Everything after it
-        is an ordinary DM, which works because the thread is now open."""
+        """Meta allows exactly one private reply per comment. Ordinary DM sends
+        become available only after the person actually replies in the thread."""
         with fake_graph() as api:
             deliver(client, at_now(load_delivery("comment")))
             run_queued()
@@ -577,10 +654,12 @@ class TestAMultiPartPrivateReply:
         comment_flow: Flow,
         comment_trigger: Trigger,
     ) -> None:
-        """Meta allows exactly one private reply per comment. A flow whose first
-        node is a gallery, or whose text is longer than Instagram's cap, is
-        several sends — and the rest have to go to the person, which works
-        because the private reply just opened the thread."""
+        """A comment grants one private reply, not a bridge to ordinary DMs.
+
+        If the opening content would render into multiple provider messages we
+        fail before the first provider call rather than send body #2 by user id
+        before the person has actually replied.
+        """
         from apps.flows.services import publish, save_draft
 
         long_flow = flow_graph(
@@ -600,19 +679,20 @@ class TestAMultiPartPrivateReply:
             deliver(client, at_now(load_delivery("comment")))
             run_queued()
 
-        recipients = [body["recipient"] for body in api.message_bodies()]
-        assert len(recipients) > 1
-        assert recipients[0] == {"comment_id": COMMENT_ID}
-        assert all(item == {"id": IG_USER_ID} for item in recipients[1:])
+        assert api.message_bodies() == []
 
-        # And the one private reply this comment gets is spent exactly once.
+        # The one-time claim remains available because no private reply reached
+        # the provider, while the failed message row tells the flow author why.
         row = HandledComment.objects.for_workspace(tenancy.workspace).get()
-        assert row.private_reply_sent_at is not None
+        assert row.private_reply_sent_at is None
+        message = Message.objects.for_workspace(tenancy.workspace).filter(direction=MessageDirection.OUT).get()
+        assert message.status == "failed"
+        assert message.error == "private_reply_multipart"
 
 
 @pytest.mark.usefixtures("instagram_app", "real_pipeline")
 class TestTheClaimIsNotAGeneralLicence:
-    """A stale claim must not hijack an unrelated send. See ``_pending_private_reply``."""
+    """A stale claim must not hijack an unrelated send."""
 
     def test_a_later_send_on_an_open_thread_is_an_ordinary_dm(
         self,
@@ -626,6 +706,9 @@ class TestTheClaimIsNotAGeneralLicence:
         with fake_graph():
             deliver(client, at_now(load_delivery("comment")))
             run_queued()
+            # A private reply is not itself an inbound DM. The person must
+            # actually answer before the ordinary messaging window is open.
+            deliver(client, at_now(load_delivery("message_text")))
 
         contact = ContactChannelIdentity.objects.for_workspace(tenancy.workspace).get().contact
         with fake_graph() as api:
@@ -693,17 +776,15 @@ class TestTheClaimIsNotAGeneralLicence:
         instagram_connection: ChannelConnection,
         comment_trigger: Trigger,
     ) -> None:
-        """The other side of the same predicate. Somebody who has only ever
-        commented has sent no inbound *message*, so Meta will not take an
-        ordinary DM and the private reply is the only form that works — even
-        though the claim itself set ``last_inbound_at``, which is why that field
-        cannot be the signal."""
+        """A pure commenter has sent no inbound DM, so the one-time private
+        reply is the only allowed opening send. The comment must leave
+        ``last_inbound_at`` unset; only a real inbound message opens that state."""
         with fake_graph() as api:
             deliver(client, at_now(load_delivery("comment")))
             run_queued()
         assert api.message_bodies()[0]["recipient"] == {"comment_id": COMMENT_ID}
         identity = ContactChannelIdentity.objects.for_workspace(tenancy.workspace).get()
-        assert identity.last_inbound_at is not None
+        assert identity.last_inbound_at is None
 
 
 @pytest.mark.usefixtures("instagram_app", "real_pipeline")

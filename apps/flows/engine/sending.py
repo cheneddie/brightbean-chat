@@ -196,7 +196,12 @@ def deliver(
         # this is the one place that has both. A node that set its own tag would
         # still lose to it, which is the direction to be wrong in — a tag is a
         # promise about *why* a message is being sent, and only the starter knows.
-        outbound=replace(outbound, node_id=node_id, tag=envelope.tag or outbound.tag),
+        outbound=replace(
+            outbound,
+            node_id=node_id,
+            tag=envelope.tag or outbound.tag,
+            private_reply_claim_id=str(execution.private_reply_claim_id or ""),
+        ),
         source=envelope.source,
         idempotency_key=idempotency_key,
     )

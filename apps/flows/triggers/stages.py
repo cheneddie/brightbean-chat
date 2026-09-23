@@ -22,6 +22,7 @@ import logging
 from typing import Any
 
 from django.db import transaction
+from django.utils import timezone
 
 from apps.channels.events import EventType
 from apps.flows.engine import FlowNotRunnableError, start_flow
@@ -229,9 +230,25 @@ def _claim_comment(context: RoutingContext, trigger: Trigger, variables: dict[st
     if context.contact is None:
         return Consumed(f"{trigger.type} trigger, awaiting a contact")
 
-    if not _start(context, trigger, variables):
+    # The claim is a fallback for the one case ordinary automation cannot
+    # reach: there is no currently open messaging window. A repeat customer who
+    # already has a valid window must stay on the normal recipient-id path; a
+    # fresh comment must not silently re-address that send as a private reply.
+    # The claim still lives on the execution, never in author-controlled
+    # variables, when the fallback is actually needed.
+    private_reply_claim = row if _needs_private_reply_claim(context) else None
+    if not _start(context, trigger, variables, private_reply_claim=private_reply_claim):
         return Passed("the matched flow could not run")
     return Consumed(f"{trigger.type} trigger")
+
+
+def _needs_private_reply_claim(context: RoutingContext) -> bool:
+    """Whether this comment-started flow needs the one-time reply allowance."""
+    identity = context.identity
+    if identity is None:
+        return True
+    expires_at = getattr(identity, "window_expires_at", None)
+    return expires_at is None or expires_at <= timezone.now()
 
 
 def register_builtin_hooks() -> None:
@@ -301,7 +318,13 @@ def default_reply_trigger_for(context: RoutingContext) -> Trigger | None:
     )
 
 
-def _start(context: RoutingContext, trigger: Trigger, variables: dict[str, Any]) -> bool:
+def _start(
+    context: RoutingContext,
+    trigger: Trigger,
+    variables: dict[str, Any],
+    *,
+    private_reply_claim: Any = None,
+) -> bool:
     """Start the trigger's flow. False when it cannot run, which is not an error.
 
     ``FlowNotRunnableError`` here means a trigger points at a flow with no
@@ -316,6 +339,7 @@ def _start(context: RoutingContext, trigger: Trigger, variables: dict[str, Any])
             started_by=StartedBy.stamp(StartedBy.TRIGGER, trigger.pk),
             variables=variables,
             connection=context.connection,
+            _private_reply_claim=private_reply_claim,
         )
     except FlowNotRunnableError as exc:
         logger.warning("Trigger %s cannot start flow %s: %s", trigger.pk, trigger.flow_id, exc)

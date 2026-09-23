@@ -51,6 +51,7 @@ def outbound_from_body(body: Any) -> OutboundMessage:
         # "" — the same thing an agent reply or an API send stores, and what an
         # adapter already has to handle as "no node behind this message".
         node_id=_text(body.get("node_id")),
+        private_reply_claim_id=_text(body.get("private_reply_claim_id")),
         # Same story one issue later (#21): absent from every row written
         # before the email channel, and "" is already what every non-email
         # send stores, so a retry of an older row rebuilds unchanged.

@@ -60,6 +60,7 @@ hypothetical.
 """
 
 import logging
+from dataclasses import replace
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -69,6 +70,7 @@ from django.db.models import F, Value
 from django.db.models.functions import Greatest
 from django.utils import timezone
 
+from apps.channels.capabilities import capabilities_for
 from apps.channels.events import OutboundMessage, SendResult, SendStatus
 from apps.channels.providers.exceptions import APIError, RateLimitError
 from apps.channels.registry import adapter_for
@@ -385,6 +387,55 @@ def _identity_for(workspace: Any, contact: Any, connection: Any) -> ContactChann
     return pending
 
 
+def _validated_private_reply(
+    workspace: Any,
+    contact: Any,
+    connection: Any,
+    identity: ContactChannelIdentity,
+    outbound: OutboundMessage,
+) -> tuple[OutboundMessage, bool]:
+    """Canonicalize and validate a one-time private-reply claim.
+
+    The claim id is internal metadata, not authority by itself. Every initial
+    send and queued retry re-checks workspace, connection, commenter, contact,
+    expiry and spent state. Invalid or stale ids are stripped before ordinary
+    compliance evaluates the message.
+    """
+    raw_id = str(getattr(outbound, "private_reply_claim_id", "") or "").strip()
+    if not raw_id:
+        return outbound, False
+    if not capabilities_for(str(connection.platform)).comment_private_reply:
+        return replace(outbound, private_reply_claim_id=""), False
+
+    try:
+        from django.core.exceptions import ValidationError
+
+        from apps.flows.models import HandledComment
+        from apps.flows.triggers.guards import may_private_reply
+
+        row = (
+            HandledComment.objects.for_workspace(workspace)
+            .filter(
+                pk=raw_id,
+                channel_connection=connection,
+                commenter_ref=identity.platform_user_id,
+                private_reply_sent_at__isnull=True,
+            )
+            .first()
+        )
+    except (TypeError, ValueError, ValidationError):
+        row = None
+
+    if row is None:
+        return replace(outbound, private_reply_claim_id=""), False
+    if row.contact_id is not None and row.contact_id != contact.pk:
+        return replace(outbound, private_reply_claim_id=""), False
+    if not may_private_reply(row):
+        return replace(outbound, private_reply_claim_id=""), False
+
+    return replace(outbound, private_reply_claim_id=str(row.pk)), True
+
+
 # ---------------------------------------------------------------------------
 # Sending
 # ---------------------------------------------------------------------------
@@ -439,7 +490,8 @@ def send_outbound(
     if identity is None:
         return _failed(conversation, outbound, source, idempotency_key, Denial.NO_IDENTITY.value)
 
-    decision = can_send(identity, source, outbound)
+    outbound, private_reply = _validated_private_reply(workspace, contact, connection, identity, outbound)
+    decision = can_send(identity, source, outbound, private_reply=private_reply)
     if not isinstance(decision, Allowed):
         # Never silently dropped: the flow engine needs a row to follow its
         # `default` edge from, and an operator needs to know what was refused.
@@ -945,6 +997,13 @@ def _code(failure: Failure, detail: str) -> str:
 
 
 def _provider_code(result: SendResult) -> str:
+    # Adapters sometimes return an application-owned failure code rather than a
+    # remote provider code (for example the one-body private-reply invariant).
+    # Preserve those stable machine codes; external/provider detail continues to
+    # be namespaced as provider_rejected:<detail>.
+    internal = {item.value for item in Failure}
+    if result.error in internal:
+        return result.error
     return f"{Failure.PROVIDER_REJECTED.value}:{result.error}" if result.error else Failure.PROVIDER_REJECTED.value
 
 

@@ -319,6 +319,14 @@ class OutboundMessage:
     #: chat. Additive to the SPEC §7.2 shape: readers that do not know the key
     #: ignore it, and an older row without it reads back as "".
     node_id: str = ""
+    #: Internal durable reference to the claimed public comment that authorizes
+    #: exactly one provider private reply. This is a claim id, not a comment id:
+    #: the send pipeline validates workspace, connection, commenter and deadline
+    #: before an adapter can use it. Empty means ordinary messaging semantics.
+    #:
+    #: Persisted in message.body so a queued retry addresses the same claim
+    #: rather than guessing at whichever unanswered comment happens to be newest.
+    private_reply_claim_id: str = ""
     #: The subject line, for platforms that have one. Email is the only such
     #: platform in v1 (SPEC §6.7, §11.10); every other adapter ignores it.
     #:
@@ -369,6 +377,7 @@ class OutboundMessage:
             # keyed by slot would lose the order the components are built in.
             "template_variables": [[slot, value] for slot, value in self.template_variables],
             "node_id": self.node_id,
+            "private_reply_claim_id": self.private_reply_claim_id,
             "subject": self.subject,
             "from_override": self.from_override,
             "html_body": self.html_body,

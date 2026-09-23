@@ -16,6 +16,7 @@ from apps.messaging.ingest import (
     MAX_MEDIA_ID_CHARS,
     MAX_MEDIA_IDS,
     PERSISTENCE_PROCESSOR,
+    PRIVATE_REPLY_CLAIMED_KEY,
     ROUTING_PROCESSOR,
     persist_events,
 )
@@ -316,6 +317,26 @@ class TestEventTypes:
         persist_events(connection, [make_event(connection, kind=EventType.COMMENT)])
         assert not ContactChannelIdentity.objects.for_workspace(tenancy.workspace).exists()
         assert not Contact.objects.for_workspace(tenancy.workspace).exists()
+        assert messages(tenancy.workspace).count() == 0
+
+    def test_a_claimed_comment_creates_identity_but_no_dm_window(self, tenancy: Any) -> None:
+        connection = make_connection(tenancy.workspace, platform=Platform.INSTAGRAM, suffix="ig-comment-claim")
+        payload = EventPayload(
+            text="price?",
+            comment_id="comment-1",
+            extra={PRIVATE_REPLY_CLAIMED_KEY: True},
+        )
+
+        persist_events(connection, [make_event(connection, kind=EventType.COMMENT, payload=payload)])
+
+        identity = ContactChannelIdentity.objects.for_workspace(tenancy.workspace).get()
+        contact = Contact.objects.for_workspace(tenancy.workspace).get()
+        assert identity.opt_in is True
+        assert identity.opt_in_source == OptInSource.COMMENT
+        assert identity.last_inbound_at is None
+        assert identity.window_expires_at is None
+        assert contact.last_interaction_at is not None
+        assert not Conversation.objects.for_workspace(tenancy.workspace).exists()
         assert messages(tenancy.workspace).count() == 0
 
 
