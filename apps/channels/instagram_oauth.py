@@ -46,11 +46,13 @@ module: Meta's token endpoints take credentials in the query string.
 """
 
 import logging
+import secrets
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 from urllib.parse import urlencode, urljoin
 
 from django.conf import settings
+from django.core.cache import cache
 from django.urls import reverse
 from django.utils import timezone
 
@@ -78,6 +80,8 @@ __all__ = [
     "exchange_code",
     "exchange_for_long_lived",
     "mark_needs_reauth",
+    "mint_state",
+    "consume_state",
     "read_state",
     "refresh_expiring_tokens",
     "refresh_long_lived",
@@ -115,6 +119,14 @@ STATE_PURPOSE = "instagram-oauth"
 #: covers an operator who reads Meta's permission screen carefully, and is far
 #: short of anything worth capturing and replaying.
 STATE_MAX_AGE = 600
+
+#: Pending OAuth states are bound to the browser session as well as being signed.
+#: A small bounded list permits an operator to connect accounts in a few tabs
+#: without turning the session into an unbounded attacker-controlled store.
+STATE_SESSION_KEY = "_instagram_oauth_pending"
+STATE_MAX_PENDING = 8
+STATE_NONCE_BYTES = 24
+STATE_CLAIM_PREFIX = "instagram-oauth-claim:"
 
 #: Where the long-lived token and its expiry live inside ``credentials``.
 TOKEN_KEY = "access_token"  # noqa: S105 - a dict key, not a credential
@@ -213,18 +225,22 @@ def callback_url() -> str:
 # ---------------------------------------------------------------------------
 
 
-def sign_state(*, workspace_id: Any, user_id: Any) -> str:
-    """A signed ``state`` binding this flow to one workspace and one operator."""
-    return signing.sign({"ws": str(workspace_id), "u": str(user_id)}, purpose=STATE_PURPOSE)
+def sign_state(*, workspace_id: Any, user_id: Any, nonce: str | None = None) -> str:
+    """A signed ``state`` binding this flow to one workspace and one operator.
 
-
-def read_state(raw: str) -> dict[str, str] | None:
-    """The payload of a valid ``state``, or ``None`` for any invalid one.
-
-    One return value for every rejection — tampered, expired, minted for another
-    purpose, malformed — because the caller does the same thing with all of them
-    and a distinguishable answer is an oracle.
+    Every newly minted state also carries a random nonce. :func:`read_state`
+    deliberately hides it from callers; :func:`consume_state` is the only
+    operation that can turn it into an accepted callback.
     """
+    value = nonce or secrets.token_urlsafe(STATE_NONCE_BYTES)
+    return signing.sign(
+        {"ws": str(workspace_id), "u": str(user_id), "n": value},
+        purpose=STATE_PURPOSE,
+    )
+
+
+def _read_state_payload(raw: str) -> dict[str, str] | None:
+    """Validate and return the complete signed state payload."""
     if not raw:
         return None
     try:
@@ -233,9 +249,87 @@ def read_state(raw: str) -> dict[str, str] | None:
         return None
     workspace_id = payload.get("ws")
     user_id = payload.get("u")
-    if not isinstance(workspace_id, str) or not isinstance(user_id, str):
+    nonce = payload.get("n")
+    if not isinstance(workspace_id, str) or not isinstance(user_id, str) or not isinstance(nonce, str) or not nonce:
         return None
-    return {"ws": workspace_id, "u": user_id}
+    return {"ws": workspace_id, "u": user_id, "n": nonce}
+
+
+def read_state(raw: str) -> dict[str, str] | None:
+    """The public identity payload of a valid ``state``, or ``None``.
+
+    The one-time nonce is intentionally not returned. Callers that accept an
+    OAuth callback must additionally call :func:`consume_state`.
+    """
+    payload = _read_state_payload(raw)
+    if payload is None:
+        return None
+    return {"ws": payload["ws"], "u": payload["u"]}
+
+
+def _fresh_pending_states(session: Any) -> list[dict[str, Any]]:
+    """Return well-formed, unexpired pending states from one browser session."""
+    raw = session.get(STATE_SESSION_KEY, [])
+    if not isinstance(raw, list):
+        return []
+    now = int(timezone.now().timestamp())
+    fresh: list[dict[str, Any]] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        nonce = item.get("n")
+        created = item.get("ts")
+        if not isinstance(nonce, str) or not nonce or not isinstance(created, int):
+            continue
+        if 0 <= now - created <= STATE_MAX_AGE:
+            fresh.append({"n": nonce, "ts": created})
+    return fresh[-STATE_MAX_PENDING:]
+
+
+def mint_state(session: Any, *, workspace_id: Any, user_id: Any) -> str:
+    """Mint a signed state and bind its nonce to the initiating browser session."""
+    nonce = secrets.token_urlsafe(STATE_NONCE_BYTES)
+    pending = _fresh_pending_states(session)
+    pending.append({"n": nonce, "ts": int(timezone.now().timestamp())})
+    session[STATE_SESSION_KEY] = pending[-STATE_MAX_PENDING:]
+    return sign_state(workspace_id=workspace_id, user_id=user_id, nonce=nonce)
+
+
+def consume_state(session: Any, raw: str) -> dict[str, str] | None:
+    """Atomically-enough claim a pending OAuth state exactly once.
+
+    The session is the durable browser binding. The shared database-backed cache
+    claim closes the concurrent-callback race where two workers could otherwise
+    read the same session before either response persisted its deletion.
+    """
+    payload = _read_state_payload(raw)
+    if payload is None:
+        return None
+
+    pending = _fresh_pending_states(session)
+    nonce = payload["n"]
+    matched = False
+    remaining: list[dict[str, Any]] = []
+    for item in pending:
+        if not matched and secrets.compare_digest(item["n"], nonce):
+            matched = True
+            continue
+        remaining.append(item)
+
+    if not matched:
+        return None
+
+    # DatabaseCache.add() is an insert-if-absent claim shared by gunicorn
+    # workers. If another callback already claimed this nonce, fail closed.
+    claim_key = f"{STATE_CLAIM_PREFIX}{nonce}"
+    if not cache.add(claim_key, "1", timeout=STATE_MAX_AGE):
+        return None
+
+    if remaining:
+        session[STATE_SESSION_KEY] = remaining
+    else:
+        session.pop(STATE_SESSION_KEY, None)
+    return {"ws": payload["ws"], "u": payload["u"]}
 
 
 def authorize_url(*, client_id: str, state: str) -> str:

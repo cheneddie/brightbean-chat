@@ -35,6 +35,7 @@ Two things are driven by that registry rather than by markup:
     {% for picker in post_pickers %}
     <button type="button" class="btn-outline btn-inline text-xs"
             hx-get="{{ picker.url }}"
+            hx-include="#trigger-connection"
             hx-target="#trigger-post-picker"
             hx-swap="innerHTML">Choose from {{ picker.label }}</button>
     {% endfor %}

@@ -42,6 +42,7 @@ class Denial(StrEnum):
     NO_OPT_IN = "no_opt_in"
     NO_IDENTITY = "no_identity"
     NO_CONNECTION = "no_connection"
+    CONNECTION_INACTIVE = "connection_inactive"
     BROADCAST_NOT_ALLOWED = "broadcast_not_allowed"
     OUTSIDE_WINDOW = "outside_window"
     NEEDS_TEMPLATE = "needs_template"
@@ -96,6 +97,7 @@ REASON_COPY: dict[str, str] = {
     Denial.NO_OPT_IN: "This contact has never given permission to message them on this channel.",
     Denial.NO_IDENTITY: "There is no address for this contact on this channel.",
     Denial.NO_CONNECTION: "This address was captured before a channel connection existed.",
+    Denial.CONNECTION_INACTIVE: "This channel connection is disabled or needs to be reconnected.",
     Denial.BROADCAST_NOT_ALLOWED: "This platform does not permit broadcasts.",
     Denial.OUTSIDE_WINDOW: "The messaging window has closed and this platform offers no way to reopen it.",
     Limit.ACTIVE_CONTACTS: "Your plan's monthly contact limit has been reached, so this did not go out.",

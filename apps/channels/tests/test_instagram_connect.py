@@ -23,6 +23,7 @@ from django.urls import reverse
 from django.utils import timezone
 
 from apps.channels import instagram_oauth as oauth
+from apps.channels import views_instagram
 from apps.channels.models import ChannelConnection, ConnectionStatus
 from apps.channels.tests.instagram_support import ACCESS_TOKEN, IG_ACCOUNT_ID
 from apps.common.platforms import Platform
@@ -67,6 +68,14 @@ def fake_oauth_api(handler: Callable[[httpx.Request], httpx.Response] | None = N
 
 def connect_url(tenancy: Tenancy) -> str:
     return reverse("channels:instagram_connect", kwargs={"workspace_id": tenancy.workspace.pk})
+
+
+def callback_state(client: Any, *, workspace_id: Any, user_id: Any) -> str:
+    """Mint a callback state inside the same browser session that will consume it."""
+    session = client.session
+    state = oauth.mint_state(session, workspace_id=workspace_id, user_id=user_id)
+    session.save()
+    return state
 
 
 class TestState:
@@ -138,9 +147,10 @@ class TestCallback:
     def test_a_full_round_trip_creates_the_connection(
         self, tenancy: Tenancy, client_for: Any, instagram_app: Any
     ) -> None:
-        state = oauth.sign_state(workspace_id=tenancy.workspace.pk, user_id=tenancy.owner.pk)
+        client = client_for(tenancy.owner)
+        state = callback_state(client, workspace_id=tenancy.workspace.pk, user_id=tenancy.owner.pk)
         with fake_oauth_api():
-            response = client_for(tenancy.owner).get(CALLBACK, {"code": "auth-code", "state": state})
+            response = client.get(CALLBACK, {"code": "auth-code", "state": state})
         assert response.status_code == 302
 
         connection = ChannelConnection.objects.for_workspace(tenancy.workspace).get()
@@ -150,6 +160,66 @@ class TestCallback:
         assert connection.display_name == "@brightbean"
         assert oauth.access_token(connection) == LONG_LIVED
         assert oauth.token_expires_at(connection) is not None
+
+    def test_one_workspace_can_connect_multiple_instagram_accounts(
+        self, tenancy: Tenancy, client_for: Any, instagram_app: Any
+    ) -> None:
+        client = client_for(tenancy.owner)
+
+        first_state = callback_state(client, workspace_id=tenancy.workspace.pk, user_id=tenancy.owner.pk)
+        with fake_oauth_api():
+            first = client.get(CALLBACK, {"code": "first-code", "state": first_state})
+        assert first.status_code == 302
+
+        second_account_id = "17841400000000002"
+        second_token = "x"
+
+        def second_account(request: httpx.Request) -> httpx.Response:
+            path = request.url.path
+            if path.endswith("/oauth/access_token"):
+                return httpx.Response(200, json={"access_token": "x", "user_id": int(second_account_id)})
+            if path.endswith("/access_token"):
+                return httpx.Response(200, json={"access_token": second_token, "expires_in": 5_183_944})
+            return httpx.Response(200, json={"user_id": second_account_id, "username": "secondaccount"})
+
+        second_state = callback_state(client, workspace_id=tenancy.workspace.pk, user_id=tenancy.owner.pk)
+        with fake_oauth_api(second_account):
+            second = client.get(CALLBACK, {"code": "second-code", "state": second_state})
+        assert second.status_code == 302
+
+        connections = ChannelConnection.objects.for_workspace(tenancy.workspace).filter(platform=Platform.INSTAGRAM)
+        assert connections.count() == 2
+        assert set(connections.values_list("external_id", flat=True)) == {IG_ACCOUNT_ID, second_account_id}
+
+    def test_a_callback_state_is_single_use(self, tenancy: Tenancy, client_for: Any, instagram_app: Any) -> None:
+        client = client_for(tenancy.owner)
+        state = callback_state(client, workspace_id=tenancy.workspace.pk, user_id=tenancy.owner.pk)
+
+        with fake_oauth_api() as seen:
+            first = client.get(CALLBACK, {"code": "auth-code-1", "state": state})
+            calls_after_first = len(seen)
+            second = client.get(CALLBACK, {"code": "auth-code-2", "state": state})
+
+        assert first.status_code == 302
+        assert second.status_code == 404
+        assert len(seen) == calls_after_first
+
+    def test_a_callback_state_is_bound_to_the_initiating_session(
+        self, tenancy: Tenancy, client_for: Any, instagram_app: Any
+    ) -> None:
+        initiating_client = client_for(tenancy.owner)
+        other_session = client_for(tenancy.owner)
+        state = callback_state(
+            initiating_client,
+            workspace_id=tenancy.workspace.pk,
+            user_id=tenancy.owner.pk,
+        )
+
+        with fake_oauth_api() as seen:
+            response = other_session.get(CALLBACK, {"code": "auth-code", "state": state})
+
+        assert response.status_code == 404
+        assert seen == []
 
     def test_a_tampered_state_is_refused_before_any_exchange(
         self, tenancy: Tenancy, client_for: Any, instagram_app: Any
@@ -164,9 +234,10 @@ class TestCallback:
     def test_a_state_for_another_user_is_refused(self, tenancy: Tenancy, client_for: Any, instagram_app: Any) -> None:
         """A shared machine, a stale tab, or an attempt to graft a connection
         onto somebody else's session."""
-        state = oauth.sign_state(workspace_id=tenancy.workspace.pk, user_id=tenancy.user_for("admin").pk)
+        client = client_for(tenancy.owner)
+        state = callback_state(client, workspace_id=tenancy.workspace.pk, user_id=tenancy.user_for("admin").pk)
         with fake_oauth_api() as seen:
-            response = client_for(tenancy.owner).get(CALLBACK, {"code": "auth-code", "state": state})
+            response = client.get(CALLBACK, {"code": "auth-code", "state": state})
         assert response.status_code == 404
         assert seen == []
 
@@ -180,12 +251,14 @@ class TestCallback:
         victim's workspace; the signed-in user is still theirs, and the
         membership lookup is what refuses.
         """
-        state = oauth.sign_state(
+        client = client_for(tenancy.owner)
+        state = callback_state(
+            client,
             workspace_id=other_tenancy.workspace.pk,
             user_id=tenancy.owner.pk,
         )
         with fake_oauth_api() as seen:
-            response = client_for(tenancy.owner).get(CALLBACK, {"code": "auth-code", "state": state})
+            response = client.get(CALLBACK, {"code": "auth-code", "state": state})
         assert response.status_code == 404
         assert seen == []
         assert not ChannelConnection.objects.for_workspace(other_tenancy.workspace).exists()
@@ -194,9 +267,10 @@ class TestCallback:
         self, tenancy: Tenancy, client_for: Any, instagram_app: Any
     ) -> None:
         viewer = tenancy.user_for("viewer")
-        state = oauth.sign_state(workspace_id=tenancy.workspace.pk, user_id=viewer.pk)
+        client = client_for(viewer)
+        state = callback_state(client, workspace_id=tenancy.workspace.pk, user_id=viewer.pk)
         with fake_oauth_api() as seen:
-            response = client_for(viewer).get(CALLBACK, {"code": "auth-code", "state": state})
+            response = client.get(CALLBACK, {"code": "auth-code", "state": state})
         assert response.status_code == 404
         assert seen == []
 
@@ -213,22 +287,22 @@ class TestCallback:
     def test_a_cancelled_authorisation_is_not_an_error(
         self, tenancy: Tenancy, client_for: Any, instagram_app: Any
     ) -> None:
-        state = oauth.sign_state(workspace_id=tenancy.workspace.pk, user_id=tenancy.owner.pk)
+        client = client_for(tenancy.owner)
+        state = callback_state(client, workspace_id=tenancy.workspace.pk, user_id=tenancy.owner.pk)
         with fake_oauth_api() as seen:
-            response = client_for(tenancy.owner).get(
-                CALLBACK, {"error": "access_denied", "error_reason": "user_denied", "state": state}
-            )
+            response = client.get(CALLBACK, {"error": "access_denied", "error_reason": "user_denied", "state": state})
         assert response.status_code == 302
         assert seen == []
 
     def test_a_refused_exchange_leaves_no_trace(self, tenancy: Tenancy, client_for: Any, instagram_app: Any) -> None:
-        state = oauth.sign_state(workspace_id=tenancy.workspace.pk, user_id=tenancy.owner.pk)
+        client = client_for(tenancy.owner)
+        state = callback_state(client, workspace_id=tenancy.workspace.pk, user_id=tenancy.owner.pk)
 
         def refuse(request: httpx.Request) -> httpx.Response:
             return httpx.Response(400, json={"error": {"message": "bad code", "code": 100}})
 
         with fake_oauth_api(refuse):
-            response = client_for(tenancy.owner).get(CALLBACK, {"code": "auth-code", "state": state})
+            response = client.get(CALLBACK, {"code": "auth-code", "state": state})
         assert response.status_code == 302
         assert not ChannelConnection.objects.for_workspace(tenancy.workspace).exists()
 
@@ -240,9 +314,10 @@ class TestCallback:
         instagram_connection.status = ConnectionStatus.NEEDS_REAUTH
         instagram_connection.save(update_fields=["status", "updated_at"])
 
-        state = oauth.sign_state(workspace_id=tenancy.workspace.pk, user_id=tenancy.owner.pk)
+        client = client_for(tenancy.owner)
+        state = callback_state(client, workspace_id=tenancy.workspace.pk, user_id=tenancy.owner.pk)
         with fake_oauth_api():
-            client_for(tenancy.owner).get(CALLBACK, {"code": "auth-code", "state": state})
+            client.get(CALLBACK, {"code": "auth-code", "state": state})
 
         instagram_connection.refresh_from_db()
         assert instagram_connection.status == ConnectionStatus.ACTIVE
@@ -262,9 +337,10 @@ class TestCallback:
         account somebody else holds fails rather than handing over their traffic.
         """
         attacker = other_tenancy.owner
-        state = oauth.sign_state(workspace_id=other_tenancy.workspace.pk, user_id=attacker.pk)
+        client = client_for(attacker)
+        state = callback_state(client, workspace_id=other_tenancy.workspace.pk, user_id=attacker.pk)
         with fake_oauth_api():
-            response = client_for(attacker).get(CALLBACK, {"code": "auth-code", "state": state})
+            response = client.get(CALLBACK, {"code": "auth-code", "state": state})
         assert response.status_code == 302
         assert not ChannelConnection.objects.for_workspace(other_tenancy.workspace).exists()
         instagram_connection.refresh_from_db()
@@ -273,12 +349,132 @@ class TestCallback:
     def test_no_token_reaches_a_log_or_the_page(
         self, tenancy: Tenancy, client_for: Any, instagram_app: Any, caplog: Any
     ) -> None:
-        state = oauth.sign_state(workspace_id=tenancy.workspace.pk, user_id=tenancy.owner.pk)
+        client = client_for(tenancy.owner)
+        state = callback_state(client, workspace_id=tenancy.workspace.pk, user_id=tenancy.owner.pk)
         with caplog.at_level(logging.DEBUG), fake_oauth_api():
-            response = client_for(tenancy.owner).get(CALLBACK, {"code": "auth-code", "state": state}, follow=True)
+            response = client.get(CALLBACK, {"code": "auth-code", "state": state}, follow=True)
         assert LONG_LIVED not in caplog.text
         assert LONG_LIVED.encode() not in response.content
         assert instagram_app["client_secret"] not in caplog.text
+
+
+class TestInstagramPostPicker:
+    def _second_connection(self, tenancy: Tenancy) -> ChannelConnection:
+        connection = ChannelConnection(
+            workspace=tenancy.workspace,
+            platform=Platform.INSTAGRAM.value,
+            display_name="@secondaccount",
+            external_id="17841400000000002",
+            status=ConnectionStatus.ACTIVE,
+        )
+        connection.save()
+        return connection
+
+    def test_selected_connection_controls_which_account_is_queried(
+        self,
+        tenancy: Tenancy,
+        client_for: Any,
+        instagram_connection: ChannelConnection,
+        monkeypatch: Any,
+    ) -> None:
+        second = self._second_connection(tenancy)
+        seen: list[Any] = []
+
+        def recent_media(connection: ChannelConnection) -> list[dict[str, str]]:
+            seen.append(connection.pk)
+            return []
+
+        monkeypatch.setattr(views_instagram.instagram, "recent_media", recent_media)
+        url = reverse("channels:instagram_posts", kwargs={"workspace_id": tenancy.workspace.pk})
+        response = client_for(tenancy.owner).get(url, {"channel_connection": str(second.pk)})
+
+        assert response.status_code == 200
+        assert seen == [second.pk]
+
+    def test_multiple_accounts_require_an_explicit_selection(
+        self,
+        tenancy: Tenancy,
+        client_for: Any,
+        instagram_connection: ChannelConnection,
+        monkeypatch: Any,
+    ) -> None:
+        self._second_connection(tenancy)
+
+        def must_not_run(connection: ChannelConnection) -> list[dict[str, str]]:
+            raise AssertionError(f"picker guessed account {connection.pk}")
+
+        monkeypatch.setattr(views_instagram.instagram, "recent_media", must_not_run)
+        url = reverse("channels:instagram_posts", kwargs={"workspace_id": tenancy.workspace.pk})
+        response = client_for(tenancy.owner).get(url)
+
+        assert response.status_code == 200
+        assert b"Choose an Instagram channel above before picking posts." in response.content
+
+    def test_foreign_workspace_connection_id_is_a_404(
+        self,
+        tenancy: Tenancy,
+        other_tenancy: Tenancy,
+        client_for: Any,
+        instagram_connection: ChannelConnection,
+        monkeypatch: Any,
+    ) -> None:
+        foreign = ChannelConnection(
+            workspace=other_tenancy.workspace,
+            platform=Platform.INSTAGRAM.value,
+            display_name="@foreign",
+            external_id="17841400000000999",
+            status=ConnectionStatus.ACTIVE,
+        )
+        foreign.save()
+
+        def must_not_run(connection: ChannelConnection) -> list[dict[str, str]]:
+            raise AssertionError(f"foreign connection leaked: {connection.pk}")
+
+        monkeypatch.setattr(views_instagram.instagram, "recent_media", must_not_run)
+        url = reverse("channels:instagram_posts", kwargs={"workspace_id": tenancy.workspace.pk})
+        response = client_for(tenancy.owner).get(url, {"channel_connection": str(foreign.pk)})
+
+        assert response.status_code == 404
+
+    def test_inactive_instagram_connection_requires_reconnect(
+        self,
+        tenancy: Tenancy,
+        client_for: Any,
+        instagram_connection: ChannelConnection,
+        monkeypatch: Any,
+    ) -> None:
+        instagram_connection.status = ConnectionStatus.NEEDS_REAUTH
+        instagram_connection.save(update_fields=["status", "updated_at"])
+
+        def must_not_run(selected: ChannelConnection) -> list[dict[str, str]]:
+            raise AssertionError(f"inactive connection reached Instagram: {selected.pk}")
+
+        monkeypatch.setattr(views_instagram.instagram, "recent_media", must_not_run)
+        url = reverse("channels:instagram_posts", kwargs={"workspace_id": tenancy.workspace.pk})
+        response = client_for(tenancy.owner).get(
+            url,
+            {"channel_connection": str(instagram_connection.pk)},
+        )
+
+        assert response.status_code == 200
+        assert b"Reconnect this Instagram channel before picking posts." in response.content
+
+    def test_non_instagram_connection_gets_a_safe_prompt(
+        self,
+        tenancy: Tenancy,
+        client_for: Any,
+        connection: ChannelConnection,
+        monkeypatch: Any,
+    ) -> None:
+        def must_not_run(selected: ChannelConnection) -> list[dict[str, str]]:
+            raise AssertionError(f"wrong platform reached Instagram: {selected.pk}")
+
+        monkeypatch.setattr(views_instagram.instagram, "recent_media", must_not_run)
+        url = reverse("channels:instagram_posts", kwargs={"workspace_id": tenancy.workspace.pk})
+        response = client_for(tenancy.owner).get(url, {"channel_connection": str(connection.pk)})
+
+        assert response.status_code == 200
+        assert b"Choose an Instagram channel above before picking posts." in response.content
 
 
 class TestTokenRefresh:

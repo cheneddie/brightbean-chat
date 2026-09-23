@@ -151,6 +151,26 @@ class TestScheduling:
         assert pending_action().run_at <= before + timedelta(seconds=handlers.MAX_RETRY_AFTER_SECONDS + 5)
 
 
+class TestConnectionLifecycle:
+    def test_retry_stops_after_connection_needs_reauth(
+        self, tenancy: Any, contact: Any, connection: Any, identity: Any
+    ) -> None:
+        from apps.channels.models import ConnectionStatus
+
+        message = queued_message(tenancy, contact, connection)
+        action = pending_action()
+        connection.status = ConnectionStatus.NEEDS_REAUTH
+        connection.save(update_fields=["status", "updated_at"])
+
+        with registered(Platform.TELEGRAM) as adapter:
+            run_retry(action)
+
+        message.refresh_from_db()
+        assert adapter.sends == []
+        assert message.status == MessageStatus.FAILED
+        assert message.error == Denial.CONNECTION_INACTIVE
+
+
 class TestRepeatedRateDeferral:
     """A throttled connection must not deadlock itself.
 
