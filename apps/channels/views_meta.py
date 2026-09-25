@@ -18,6 +18,7 @@ from apps.channels.meta_callbacks import (
     create_deletion_receipt,
     delete_connected_instagram_account,
     deployment_instagram_app_secret,
+    organization_instagram_app_secret,
     parse_signed_request,
     receipt_for_code,
 )
@@ -56,8 +57,15 @@ def _signed_request(request: HttpRequest) -> str | None:
     return value if isinstance(value, str) and value else None
 
 
-def _verified_user_id(request: HttpRequest) -> str | None:
-    secret = _app_secret_or_404()
+def _organization_app_secret_or_404(organization_id: object) -> str:
+    secret = organization_instagram_app_secret(organization_id)
+    if not secret:
+        raise Http404
+    return secret
+
+
+def _verified_user_id(request: HttpRequest, *, app_secret: str | None = None) -> str | None:
+    secret = app_secret or _app_secret_or_404()
     signed = _signed_request(request)
     if not signed:
         return None
@@ -93,6 +101,39 @@ def instagram_data_deletion(request: HttpRequest) -> HttpResponse:
     status_path = reverse("instagram_data_deletion_status", kwargs={"confirmation_code": code})
     status_url = request.build_absolute_uri(status_path)
     logger.info("Processed Instagram data-deletion callback; deleted_connections=%s", deleted)
+    return JsonResponse({"url": status_url, "confirmation_code": code})
+
+
+@csrf_exempt
+def organization_instagram_deauthorize(request: HttpRequest, organization_id: object) -> HttpResponse:
+    """Handle deauthorization for one organization's BYO Instagram Meta App."""
+    if request.method != "POST":
+        return HttpResponseNotAllowed(["POST"])
+    secret = _organization_app_secret_or_404(organization_id)
+    user_id = _verified_user_id(request, app_secret=secret)
+    if user_id is None:
+        return JsonResponse({"status": "invalid_request"}, status=403)
+
+    deleted = delete_connected_instagram_account(user_id, organization_id=organization_id)
+    logger.info("Processed organization Instagram deauthorize callback; deleted_connections=%s", deleted)
+    return JsonResponse({"status": "ok"})
+
+
+@csrf_exempt
+def organization_instagram_data_deletion(request: HttpRequest, organization_id: object) -> HttpResponse:
+    """Delete local connections for one organization's BYO Instagram Meta App."""
+    if request.method != "POST":
+        return HttpResponseNotAllowed(["POST"])
+    secret = _organization_app_secret_or_404(organization_id)
+    user_id = _verified_user_id(request, app_secret=secret)
+    if user_id is None:
+        return JsonResponse({"status": "invalid_request"}, status=403)
+
+    deleted = delete_connected_instagram_account(user_id, organization_id=organization_id)
+    code, _receipt = create_deletion_receipt(deleted_connections=deleted)
+    status_path = reverse("instagram_data_deletion_status", kwargs={"confirmation_code": code})
+    status_url = request.build_absolute_uri(status_path)
+    logger.info("Processed organization Instagram data-deletion callback; deleted_connections=%s", deleted)
     return JsonResponse({"url": status_url, "confirmation_code": code})
 
 
