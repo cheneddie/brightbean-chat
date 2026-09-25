@@ -40,6 +40,7 @@ from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+from django.conf import settings
 from django.db import transaction
 from django.db.models import F, Q
 from django.utils import timezone
@@ -68,7 +69,7 @@ HOUSEKEEPING_INTERVAL = timedelta(hours=1)
 #: The number is a bet that no handler legitimately runs for ten minutes. If one
 #: ever does, it must checkpoint by touching ``updated_at`` — otherwise the
 #: sweep hands its row to a second worker while the first is still working.
-ZOMBIE_AFTER = timedelta(minutes=10)
+ZOMBIE_AFTER = timedelta(seconds=max(1, int(getattr(settings, "QUEUE_ZOMBIE_AFTER_SECONDS", 10 * 60))))
 
 #: Serialises the bootstrap check-then-create across every worker and tick.
 #: Same mechanism as the contact locks (SPEC §9.6), different namespace.
