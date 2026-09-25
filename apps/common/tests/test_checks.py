@@ -100,6 +100,7 @@ class TestMetaReviewLegalUrls:
 
         assert check_meta_review_legal_urls() == []
 
+
 @pytest.mark.django_db
 class TestS3CustomDomainSigning:
     """django-storages returns unsigned URLs on the custom-domain path unless a
