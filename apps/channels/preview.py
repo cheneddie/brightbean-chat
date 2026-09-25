@@ -295,14 +295,20 @@ def _claim(connection: ChannelConnection, handle: str, chat_id: str) -> FlowPrev
         # Cross-tenant for the same reason as the filter above. Re-read through
         # the same predicate, so a row that stopped matching between the two
         # statements is not resurrected here.
-        link = rows.select_related("flow", "flow__workspace", "channel_connection").first()
+        # The inbound webhook already resolved and verified `connection`.
+        # Re-reading it here used to decrypt its credentials/webhook secret as a
+        # side effect of select_related(), which made an opaque preview-handle
+        # claim depend on unrelated encrypted fields surviving key rotation.
+        # The link only needs its flow; use the verified connection argument for
+        # the final status gate below.
+        link = rows.select_related("flow", "flow__workspace").first()
         if link is not None and link.handle_digest != digest:
             FlowPreviewLink.objects.unscoped().filter(pk=link.pk, handle_digest=link.handle_digest).update(
                 handle_digest=digest,
                 updated_at=now,
             )
             link.handle_digest = digest
-    if link is None or link.channel_connection.status == ConnectionStatus.DISABLED:
+    if link is None or connection.status == ConnectionStatus.DISABLED:
         return None
     return link
 
