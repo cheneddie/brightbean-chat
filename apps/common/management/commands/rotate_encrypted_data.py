@@ -83,9 +83,7 @@ class Command(BaseCommand):
 
         invitation_model = apps.get_model("members", "Invitation")
         if invitation_model is not None:
-            live_invites = invitation_model._base_manager.filter(
-                accepted_at__isnull=True, expires_at__gt=now
-            ).count()
+            live_invites = invitation_model._base_manager.filter(accepted_at__isnull=True, expires_at__gt=now).count()
             lines.append(
                 f"Live invitation links using digest-only tokens: {live_invites}. "
                 "They remain valid through fallback lookup; resend or wait for expiry before removing fallbacks."
