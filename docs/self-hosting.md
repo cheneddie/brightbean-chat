@@ -647,10 +647,18 @@ A degraded response remains HTTP 200 because a short burst or one isolated
 terminal failure should be visible without making an otherwise healthy web
 process fail its liveness check.
 
-**Known limitation:** queue state is not a worker heartbeat. An empty queue can
-look `ok` even when no worker/tick consumer is alive. D9 tracks an explicit
-consumer heartbeat separately; do not use this endpoint alone as proof that a
-background worker is running.
+Every supported queue consumer updates one deployment heartbeat:
+
+- `process_tasks` records source `worker`;
+- `manage.py tick` records source `cli_tick`;
+- `/internal/tick` records source `http_tick`.
+
+If that heartbeat is missing or older than
+`QUEUE_CONSUMER_HEARTBEAT_MAX_AGE_SECONDS` (120 seconds by default),
+`/internal/queue-status` answers HTTP 503 even when the queue is empty. For
+tick mode, set the threshold comfortably above the scheduler interval; a
+five-minute scheduler with the 120-second default will correctly look stale
+between ticks.
 
 ---
 
