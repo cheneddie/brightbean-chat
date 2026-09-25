@@ -1,12 +1,15 @@
 """``/internal/tick`` — the token gate and the drain behind it."""
 
+from datetime import timedelta
 from typing import Any
 
 import pytest
 from django.test import Client
 from django.urls import reverse
+from django.utils import timezone
 
-from apps.queueing.models import ActionStatus, ScheduledAction
+from apps.queueing.health import HEARTBEAT_KEY, touch_queue_consumer
+from apps.queueing.models import ActionStatus, QueueConsumerHeartbeat, ScheduledAction
 from apps.queueing.tests.support import make_action, temporary_handler
 from tests.support import Tenancy
 
@@ -21,6 +24,11 @@ def _noop(payload: dict[str, Any], action: ScheduledAction) -> None:
 @pytest.fixture
 def url() -> str:
     return reverse("internal_tick")
+
+
+@pytest.fixture
+def status_url() -> str:
+    return reverse("internal_queue_status")
 
 
 @pytest.mark.django_db
@@ -124,6 +132,8 @@ class TestDrain:
         assert body["stranded"] == 0
         assert "duration_ms" in body
         assert ScheduledAction.objects.for_workspace(tenancy.workspace).filter(status=ActionStatus.DONE).count() == 2
+        heartbeat = QueueConsumerHeartbeat.objects.get(key=HEARTBEAT_KEY)
+        assert heartbeat.source == "http_tick"
 
     def test_post_works_too(self, client: Client, url: str, settings: Any) -> None:
         """External pingers use both verbs, and POST carries no CSRF cookie."""
@@ -160,3 +170,129 @@ class TestDrain:
 
         assert response.status_code == 200
         assert "login" not in response["Content-Type"]
+
+
+@pytest.mark.django_db
+class TestQueueStatus:
+    def test_missing_consumer_heartbeat_is_a_hard_error(self, client: Client, status_url: str, settings: Any) -> None:
+        settings.TICK_TOKEN = TOKEN
+        response = client.get(f"{status_url}?token={TOKEN}")
+
+        assert response.status_code == 503
+        body = response.json()
+        assert body["status"] == "error"
+        assert body["consumer"]["source"] == ""
+        assert body["consumer"]["age_seconds"] is None
+        assert body["consumer"]["stale"] is True
+
+    def test_stale_consumer_heartbeat_is_a_hard_error(self, client: Client, status_url: str, settings: Any) -> None:
+        settings.TICK_TOKEN = TOKEN
+        settings.QUEUE_CONSUMER_HEARTBEAT_MAX_AGE_SECONDS = 120
+        touch_queue_consumer("worker", force=True)
+        QueueConsumerHeartbeat.objects.filter(key=HEARTBEAT_KEY).update(
+            last_seen_at=timezone.now() - timedelta(minutes=3)
+        )
+
+        response = client.get(f"{status_url}?token={TOKEN}")
+
+        assert response.status_code == 503
+        body = response.json()
+        assert body["status"] == "error"
+        assert body["consumer"]["source"] == "worker"
+        assert body["consumer"]["age_seconds"] >= 120
+        assert body["consumer"]["stale"] is True
+
+    def test_it_is_hidden_without_the_shared_operations_token(
+        self, client: Client, status_url: str, settings: Any
+    ) -> None:
+        settings.TICK_TOKEN = TOKEN
+        assert client.get(status_url).status_code == 404
+        assert client.get(f"{status_url}?token=wrong").status_code == 404
+
+    def test_it_is_read_only_and_reports_a_healthy_empty_queue(
+        self, client: Client, status_url: str, settings: Any
+    ) -> None:
+        settings.TICK_TOKEN = TOKEN
+        settings.QUEUE_CONSUMER_HEARTBEAT_MAX_AGE_SECONDS = 120
+        touch_queue_consumer("worker", force=True)
+        before = ScheduledAction.objects.unscoped().count()
+
+        response = client.get(f"{status_url}?token={TOKEN}")
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["status"] == "ok"
+        assert body["consumer"]["source"] == "worker"
+        assert body["consumer"]["stale"] is False
+        assert body["consumer"]["age_seconds"] <= 1
+        assert body["consumer"]["max_age_seconds"] == 120
+        assert body["queue"] == {
+            "due_pending": 0,
+            "running": 0,
+            "stale_running": 0,
+            "failed_last_24h": 0,
+            "oldest_overdue_seconds": 0,
+            "overdue_warn_after_seconds": 60,
+            "zombie_after_seconds": 600,
+        }
+        assert ScheduledAction.objects.unscoped().count() == before
+
+    def test_old_due_work_is_degraded_but_does_not_fail_the_web_process(
+        self, client: Client, status_url: str, settings: Any, tenancy: Tenancy
+    ) -> None:
+        settings.TICK_TOKEN = TOKEN
+        settings.QUEUE_STATUS_OVERDUE_WARN_SECONDS = 60
+        touch_queue_consumer("worker", force=True)
+        action = make_action(tenancy.workspace)
+        ScheduledAction.objects.for_workspace(tenancy.workspace).filter(pk=action.pk).update(
+            run_at=timezone.now() - timedelta(minutes=2)
+        )
+
+        response = client.get(f"{status_url}?token={TOKEN}")
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["status"] == "degraded"
+        assert body["queue"]["due_pending"] == 1
+        assert body["queue"]["oldest_overdue_seconds"] >= 60
+
+    def test_a_stale_running_row_is_an_operational_error(
+        self, client: Client, status_url: str, settings: Any, tenancy: Tenancy
+    ) -> None:
+        settings.TICK_TOKEN = TOKEN
+        touch_queue_consumer("worker", force=True)
+        action = make_action(tenancy.workspace)
+        ScheduledAction.objects.for_workspace(tenancy.workspace).filter(pk=action.pk).update(
+            status=ActionStatus.RUNNING,
+            updated_at=timezone.now() - timedelta(minutes=11),
+        )
+
+        response = client.get(f"{status_url}?token={TOKEN}")
+
+        assert response.status_code == 503
+        body = response.json()
+        assert body["status"] == "error"
+        assert body["queue"]["running"] == 1
+        assert body["queue"]["stale_running"] == 1
+
+    def test_recent_terminal_failure_is_visible_as_degraded(
+        self, client: Client, status_url: str, settings: Any, tenancy: Tenancy
+    ) -> None:
+        settings.TICK_TOKEN = TOKEN
+        touch_queue_consumer("worker", force=True)
+        make_action(tenancy.workspace, status=ActionStatus.FAILED)
+
+        response = client.get(f"{status_url}?token={TOKEN}")
+
+        assert response.status_code == 200
+        assert response.json()["status"] == "degraded"
+        assert response.json()["queue"]["failed_last_24h"] == 1
+
+    def test_method_is_revealed_only_after_valid_authentication(
+        self, client: Client, status_url: str, settings: Any
+    ) -> None:
+        settings.TICK_TOKEN = TOKEN
+        assert client.post(status_url).status_code == 404
+        response = client.post(f"{status_url}?token={TOKEN}")
+        assert response.status_code == 405
+        assert response["Allow"] == "GET"

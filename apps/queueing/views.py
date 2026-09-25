@@ -23,13 +23,17 @@ configuration (SECURITY-BASELINE §4).
 
 import logging
 import time
+from datetime import timedelta
 
 from django.conf import settings
 from django.http import Http404, HttpRequest, HttpResponse, HttpResponseNotAllowed, JsonResponse
+from django.utils import timezone
 from django.utils.crypto import constant_time_compare
 from django.views.decorators.csrf import csrf_exempt
 
-from apps.queueing.housekeeping import ensure_housekeeping_scheduled
+from apps.queueing.health import HEARTBEAT_KEY, touch_queue_consumer
+from apps.queueing.housekeeping import ZOMBIE_AFTER, ensure_housekeeping_scheduled
+from apps.queueing.models import ActionStatus, QueueConsumerHeartbeat, ScheduledAction
 from apps.queueing.worker import drain
 
 logger = logging.getLogger(__name__)
@@ -56,6 +60,17 @@ MAX_SECONDS = 20
 BATCH_SIZE = 10
 
 
+def _require_tick_token(request: HttpRequest) -> None:
+    """Authenticate a deployment-level queue operations endpoint."""
+    expected = (getattr(settings, "TICK_TOKEN", "") or "").strip()
+    if not expected:
+        raise Http404
+    provided = request.GET.get("token", "")
+    if not constant_time_compare(provided, expected):
+        logger.warning("Rejected internal queue endpoint: bad or missing token")
+        raise Http404
+
+
 @csrf_exempt  # Token-authenticated, not session-authenticated: an external pinger has no CSRF cookie.
 def internal_tick(request: HttpRequest) -> HttpResponse:
     """Drain the queue once. 404 unless the caller presents ``TICK_TOKEN``.
@@ -70,20 +85,7 @@ def internal_tick(request: HttpRequest) -> HttpResponse:
     tenant views: the check that reveals nothing has to run before the one that
     reveals something.
     """
-    expected = (getattr(settings, "TICK_TOKEN", "") or "").strip()
-    if not expected:
-        # Unset means the route does not exist for this deployment. 404 rather
-        # than 403 or 503: an operator who has not configured it should not be
-        # able to learn from the response that it is there to be configured.
-        raise Http404
-
-    provided = request.GET.get("token", "")
-    if not constant_time_compare(provided, expected):
-        # Bare 404, no detail, no distinguishable status (SECURITY-BASELINE §4).
-        # Logged without the token — the scrubbing filter would redact it
-        # anyway, but there is no reason to hand it to the filter at all.
-        logger.warning("Rejected /internal/tick: bad or missing token")
-        raise Http404
+    _require_tick_token(request)
 
     # Only now, with the caller proven, is it safe to say something specific.
     if request.method not in ("GET", "POST"):
@@ -91,7 +93,9 @@ def internal_tick(request: HttpRequest) -> HttpResponse:
 
     started = time.monotonic()
     ensure_housekeeping_scheduled()
+    touch_queue_consumer("http_tick", force=True)
     result = drain(batch_size=BATCH_SIZE, max_seconds=MAX_SECONDS)
+    touch_queue_consumer("http_tick", force=True)
     duration_ms = int((time.monotonic() - started) * 1000)
 
     logger.info(
@@ -112,4 +116,66 @@ def internal_tick(request: HttpRequest) -> HttpResponse:
             "stranded": result.stranded,
             "duration_ms": duration_ms,
         }
+    )
+
+
+@csrf_exempt
+def internal_queue_status(request: HttpRequest) -> HttpResponse:
+    """Read-only deployment queue health for external monitoring.
+
+    This endpoint never drains, retries, repairs or bootstraps the queue. A
+    health check that mutates what it observes can hide the outage it should
+    report.
+    """
+    _require_tick_token(request)
+    if request.method != "GET":
+        return HttpResponseNotAllowed(["GET"])
+
+    now = timezone.now()
+    actions = ScheduledAction.objects.unscoped()
+    due = actions.filter(status=ActionStatus.PENDING, run_at__lte=now)
+    oldest_due = due.order_by("run_at").values_list("run_at", flat=True).first()
+    overdue_seconds = max(0, int((now - oldest_due).total_seconds())) if oldest_due is not None else 0
+    running = actions.filter(status=ActionStatus.RUNNING)
+    stale_running = running.filter(updated_at__lt=now - ZOMBIE_AFTER).count()
+    failed_recent = actions.filter(
+        status=ActionStatus.FAILED,
+        updated_at__gte=now - timedelta(hours=24),
+    ).count()
+    warn_after = max(1, int(getattr(settings, "QUEUE_STATUS_OVERDUE_WARN_SECONDS", 60)))
+    heartbeat_max_age = max(1, int(getattr(settings, "QUEUE_CONSUMER_HEARTBEAT_MAX_AGE_SECONDS", 120)))
+    heartbeat = QueueConsumerHeartbeat.objects.filter(key=HEARTBEAT_KEY).first()
+    heartbeat_age = max(0, int((now - heartbeat.last_seen_at).total_seconds())) if heartbeat is not None else None
+    heartbeat_stale = heartbeat_age is None or heartbeat_age > heartbeat_max_age
+
+    if stale_running or heartbeat_stale:
+        overall = "error"
+        http_status = 503
+    elif overdue_seconds >= warn_after or failed_recent:
+        overall = "degraded"
+        http_status = 200
+    else:
+        overall = "ok"
+        http_status = 200
+
+    return JsonResponse(
+        {
+            "status": overall,
+            "consumer": {
+                "source": heartbeat.source if heartbeat is not None else "",
+                "age_seconds": heartbeat_age,
+                "max_age_seconds": heartbeat_max_age,
+                "stale": heartbeat_stale,
+            },
+            "queue": {
+                "due_pending": due.count(),
+                "running": running.count(),
+                "stale_running": stale_running,
+                "failed_last_24h": failed_recent,
+                "oldest_overdue_seconds": overdue_seconds,
+                "overdue_warn_after_seconds": warn_after,
+                "zombie_after_seconds": int(ZOMBIE_AFTER.total_seconds()),
+            },
+        },
+        status=http_status,
     )

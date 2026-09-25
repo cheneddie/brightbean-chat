@@ -41,16 +41,19 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
+from django.conf import settings
 from django.db import IntegrityError, transaction
 from django.db.models import Q
 from django.utils import timezone
 
+from apps.queueing.locks import advisory_lock
 from apps.queueing.models import DEFAULT_MAX_ATTEMPTS, ActionStatus, ScheduledAction, coerce_contact_id
 
 __all__ = [
     "DuplicateHandlerError",
     "Handler",
     "IdempotencyKeyConflictError",
+    "QueueAdmissionLimitError",
     "UnknownActionTypeError",
     "cancel_pending",
     "PurgeResult",
@@ -69,6 +72,14 @@ Handler = Callable[[dict[str, Any], ScheduledAction], None]
 
 _HANDLERS: dict[str, Handler] = {}
 
+# Low-volume control-plane work that must remain deliverable when a tenant's
+# data-plane backlog is full. Keep this list deliberately tiny: an entry here
+# bypasses the active-backlog admission cap, though the row remains workspace-
+# scoped and goes through the same idempotency/write path. Notification email is
+# the operator warning path for failures such as loop caps; letting a saturated
+# tenant queue suppress its own warning would turn backpressure into blindness.
+_ADMISSION_RESERVED_TYPES = frozenset({"notification_email"})
+
 
 class DuplicateHandlerError(RuntimeError):
     """Two handlers registered for one action type."""
@@ -80,6 +91,10 @@ class UnknownActionTypeError(LookupError):
 
 class IdempotencyKeyConflictError(RuntimeError):
     """An idempotency key is already in use by a different workspace."""
+
+
+class QueueAdmissionLimitError(RuntimeError):
+    """A workspace already has the configured maximum active queue backlog."""
 
 
 def register_handler(action_type: str, *, replace: bool = False) -> Callable[[Handler], Handler]:
@@ -305,7 +320,13 @@ def _schedule(
     idempotency_key: str | None,
     max_attempts: int,
 ) -> ScheduledAction:
-    """The shared body. Callers go through ``schedule`` or ``schedule_system``."""
+    """The shared body. Callers go through ``schedule`` or ``schedule_system``.
+
+    Tenant enqueue is admission-controlled at this chokepoint. A transaction-
+    scoped advisory lock serialises the count+insert decision per workspace so
+    concurrent request threads cannot all observe one free slot and overrun the
+    cap. Deployment-level system rows are deliberately exempt.
+    """
     if get_handler(action_type) is None:
         # Not an error: an app may enqueue before the app that owns the type has
         # been imported, and the SPEC's own housekeeping chain enqueues its
@@ -328,6 +349,59 @@ def _schedule(
         "idempotency_key": idempotency_key,
     }
 
+    if workspace is None or action_type in _ADMISSION_RESERVED_TYPES:
+        return _create_action(fields, idempotency_key=idempotency_key, workspace=workspace)
+
+    workspace_id = getattr(workspace, "pk", workspace)
+    with transaction.atomic(), advisory_lock(f"queue-admission:{workspace_id}"):
+        # Idempotency is checked before capacity: repeating work that is already
+        # arranged must remain a no-op even when the workspace is at its limit.
+        if idempotency_key is not None:
+            existing = ScheduledAction.objects.for_workspace(workspace).filter(idempotency_key=idempotency_key).first()
+            if existing is not None:
+                return existing
+
+            # Preserve the cross-tenant collision contract before a capacity
+            # error can mask it. Only existence crosses tenant scope; no row is
+            # returned to the caller.
+            if ScheduledAction.objects.unscoped().filter(idempotency_key=idempotency_key).exists():
+                return _existing_for_key(idempotency_key, workspace)
+
+        _enforce_workspace_admission(workspace)
+        return _create_action(fields, idempotency_key=idempotency_key, workspace=workspace)
+
+
+def _enforce_workspace_admission(workspace: Any) -> None:
+    """Reject a distinct tenant enqueue once its active backlog reaches the cap.
+
+    Only pending/running work counts. Terminal history is retained for
+    observability without permanently consuming admission capacity.
+
+    A value <= 0 disables the guard for self-hosters that deliberately prefer an
+    unbounded queue.
+    """
+    limit = int(getattr(settings, "QUEUE_MAX_ACTIVE_PER_WORKSPACE", 10_000))
+    if limit <= 0:
+        return
+
+    active = (
+        ScheduledAction.objects.for_workspace(workspace)
+        .filter(status__in=(ActionStatus.PENDING, ActionStatus.RUNNING))
+        .count()
+    )
+    if active >= limit:
+        raise QueueAdmissionLimitError(
+            f"Workspace queue admission limit reached: {active} active action(s), limit {limit}."
+        )
+
+
+def _create_action(
+    fields: dict[str, Any],
+    *,
+    idempotency_key: str | None,
+    workspace: Any,
+) -> ScheduledAction:
+    """Insert one action, preserving the idempotency race handling."""
     if idempotency_key is None:
         return ScheduledAction.objects.create(**fields)
 
@@ -345,7 +419,7 @@ def _schedule(
             raise
 
     existing = _existing_for_key(idempotency_key, workspace)
-    logger.debug("Idempotent enqueue of %r hit existing action %s", action_type, existing.pk)
+    logger.debug("Idempotent enqueue hit existing action %s", existing.pk)
     return existing
 
 

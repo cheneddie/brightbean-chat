@@ -10,6 +10,7 @@ from django.utils import timezone
 
 from apps.common.models import RateLimitCounter
 from apps.queueing.models import ActionStatus, ScheduledAction
+from apps.queueing.registry import QueueAdmissionLimitError
 from apps.queueing.tests.support import (
     advisory_lock_count,
     contact_lock_is_held,
@@ -122,6 +123,29 @@ class TestClaim:
 
         assert claimed == {mine.pk, theirs.pk, system.pk}
 
+    def test_a_ten_thousand_row_workspace_cannot_starve_a_ten_row_workspace(
+        self, tenancy: Tenancy, other_tenancy: Tenancy
+    ) -> None:
+        noisy_due = timezone.now() - timedelta(minutes=2)
+        quiet_due = timezone.now() - timedelta(minutes=1)
+        ScheduledAction.objects.bulk_create(
+            ScheduledAction(workspace=tenancy.workspace, run_at=noisy_due, type=PROBE, payload={"n": n})
+            for n in range(10_000)
+        )
+        ScheduledAction.objects.bulk_create(
+            ScheduledAction(workspace=other_tenancy.workspace, run_at=quiet_due, type=PROBE, payload={"n": n})
+            for n in range(10)
+        )
+
+        claimed = claim_batch(50)
+        by_workspace: dict[Any, int] = {}
+        for action in claimed:
+            by_workspace[action.workspace_id] = by_workspace.get(action.workspace_id, 0) + 1
+
+        assert len(claimed) == 50
+        assert by_workspace[other_tenancy.workspace.pk] == 10
+        assert by_workspace[tenancy.workspace.pk] == 40
+
     @pytest.mark.parametrize("limit", [0, -1])
     def test_a_non_positive_limit_is_refused(self, tenancy: Tenancy, limit: int) -> None:
         """It used to return [], which is what made drain() spin forever."""
@@ -168,6 +192,23 @@ class TestProcessAction:
         # First failure: 30 seconds out, give or take the test's own runtime.
         assert timedelta(seconds=29) <= action.run_at - before <= timedelta(seconds=31)
         assert "handler exploded" in action.last_error
+
+    def test_admission_backpressure_does_not_spend_retry_budget(self, tenancy: Tenancy) -> None:
+        def saturated(payload: dict[str, Any], action: ScheduledAction) -> None:
+            raise QueueAdmissionLimitError("workspace queue is full")
+
+        make_action(tenancy.workspace, type=PROBE, max_attempts=1)
+        with temporary_handler(PROBE, saturated):
+            before = timezone.now()
+            action = claim_batch()[0]
+            assert action.attempts == 1
+            assert process_action(action) == ActionStatus.PENDING
+
+        action.refresh_from_db()
+        assert action.status == ActionStatus.PENDING
+        assert action.attempts == 0
+        assert timedelta(seconds=29) <= action.run_at - before <= timedelta(seconds=31)
+        assert "QueueAdmissionLimitError" in action.last_error
 
     def test_a_failing_handlers_writes_are_rolled_back(self, tenancy: Tenancy) -> None:
         """The handler's transaction is the row's transaction: half-done work cannot commit."""

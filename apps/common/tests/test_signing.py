@@ -67,6 +67,28 @@ class TestRejection:
             unsign(token, purpose="click")
 
 
+class TestSecretKeyRotation:
+    def test_django_secret_key_fallback_keeps_existing_signed_tokens_valid(self, settings):
+        old_secret = settings.SECRET_KEY
+        token = sign({"contact": "abc"}, purpose="unsubscribe")
+
+        settings.SECRET_KEY = "new-signing-secret-for-rotation-tests"
+        settings.SECRET_KEY_FALLBACKS = [old_secret]
+
+        assert unsign(token, purpose="unsubscribe") == {"contact": "abc"}
+
+    def test_old_signed_token_fails_once_fallback_is_removed(self, settings):
+        old_secret = settings.SECRET_KEY
+        token = sign({"contact": "abc"}, purpose="unsubscribe")
+        settings.SECRET_KEY = "new-signing-secret-for-rotation-tests"
+        settings.SECRET_KEY_FALLBACKS = [old_secret]
+        assert unsign(token, purpose="unsubscribe") == {"contact": "abc"}
+
+        settings.SECRET_KEY_FALLBACKS = []
+        with pytest.raises(InvalidTokenError):
+            unsign(token, purpose="unsubscribe")
+
+
 class TestVersionMigration:
     """A format change has to be a rollout, not a cutover.
 

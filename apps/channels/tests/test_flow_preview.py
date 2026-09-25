@@ -127,6 +127,31 @@ class TestTheMetaPlatformsRunTheDraft:
         assert execution is not None
         assert execution.flow_version.published is False
 
+    def test_pre_rotation_preview_handle_claims_and_lazy_rehashes(
+        self, tenancy: Tenancy, drafted_flow: Any, settings: Any
+    ) -> None:
+        connection = connection_for(tenancy, Platform.MESSENGER, display_name="@acme", external_id="rotation-page")
+        link, handle = preview.mint(flow=drafted_flow, connection=connection, user=tenancy.owner)
+        old_digest = link.handle_digest
+        old_secret = settings.SECRET_KEY
+        old_salt = settings.ENCRYPTION_KEY_SALT
+
+        settings.SECRET_KEY = "new-preview-secret-for-rotation-tests"
+        settings.ENCRYPTION_KEY_SALT = b"new-preview-salt-for-rotation-tests"
+        settings.ENCRYPTION_KEY_FALLBACKS = [{"secret_key": old_secret, "salt": old_salt.decode("utf-8")}]
+
+        claimed = preview._claim(connection, handle, "chat-rotation")
+        assert claimed is not None
+        link.refresh_from_db()
+
+        from apps.common.encryption import hmac_digest
+
+        assert link.handle_digest == hmac_digest(handle)
+        assert link.handle_digest != old_digest
+
+        settings.ENCRYPTION_KEY_FALLBACKS = []
+        assert preview._claim(connection, handle, "chat-rotation") is not None
+
     def test_a_link_minted_for_one_page_does_not_work_on_another(self, tenancy: Tenancy, drafted_flow: Any) -> None:
         """The security-relevant clause in ``_claim``, re-pinned for Meta: the
         lookup at claim time spans every connection in the deployment, because

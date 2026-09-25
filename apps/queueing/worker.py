@@ -5,18 +5,16 @@ Every entry point shares this module: ``manage.py process_tasks`` loops over
 :func:`drain`. There is one implementation of "what happens to a due row", so
 the three cannot drift.
 
-**Concurrency safety is structural, not conventional.** SPEC §15's claim
-statement is the load-bearing part::
+**Concurrency safety is structural, not conventional.** The claim keeps
+SPEC §15's ``FOR UPDATE SKIP LOCKED`` guarantee, but D9 adds one ordering
+layer before the lock: due rows are ranked inside each workspace, then the
+worker takes lane 1 across workspaces before lane 2, and so on. A workspace
+with 10 000 older rows therefore cannot hide another workspace's ten due rows
+behind 200 batches.
 
-    UPDATE scheduled_action SET status='running', attempts=attempts+1
-     WHERE id IN (SELECT id FROM scheduled_action
-                   WHERE status='pending' AND run_at <= now()
-                   ORDER BY run_at LIMIT 50 FOR UPDATE SKIP LOCKED)
-    RETURNING *
-
-``FOR UPDATE SKIP LOCKED`` means two workers running the identical statement at
-the identical moment select disjoint row sets — the second does not block and
-does not see the first's rows. The ``UPDATE`` commits the ``running`` status
+``FOR UPDATE SKIP LOCKED`` still means two workers running the identical
+statement at the identical moment select disjoint row sets — the second does
+not block and does not see the first's rows. The ``UPDATE`` commits the ``running`` status
 before any handler runs, so a third worker arriving a millisecond later sees no
 ``pending`` row to claim. No queue table lock, no leader election, no Redis
 (SPEC §22). ``/internal/tick`` is therefore safe to fire while workers run, and
@@ -48,7 +46,7 @@ from django.utils import timezone
 from apps.common.logging import scrub
 from apps.queueing.locks import contact_lock
 from apps.queueing.models import ActionStatus, ScheduledAction
-from apps.queueing.registry import get_handler, registered_types
+from apps.queueing.registry import QueueAdmissionLimitError, get_handler, registered_types
 
 __all__ = [
     "BACKOFF_SCHEDULE",
@@ -87,20 +85,33 @@ MAX_STORED_ERROR_CHARS = 2000
 # ``_meta.db_table``: an f-string here would be a string-built query (ruff S608)
 # for no benefit, and the two are pinned together by a test.
 CLAIM_SQL = """
-    UPDATE queueing_scheduled_action
+    WITH ranked AS MATERIALIZED (
+        SELECT id,
+               row_number() OVER (
+                   PARTITION BY workspace_id
+                   ORDER BY run_at, id
+               ) AS workspace_lane
+          FROM queueing_scheduled_action
+         WHERE status = 'pending'
+           AND run_at <= now()
+    ),
+    picked AS MATERIALIZED (
+        SELECT action.id
+          FROM queueing_scheduled_action AS action
+          JOIN ranked ON ranked.id = action.id
+         WHERE action.status = 'pending'
+           AND action.run_at <= now()
+         ORDER BY ranked.workspace_lane, action.run_at, action.id
+         LIMIT %s
+           FOR UPDATE OF action SKIP LOCKED
+    )
+    UPDATE queueing_scheduled_action AS action
        SET status = 'running',
-           attempts = attempts + 1,
+           attempts = action.attempts + 1,
            updated_at = now()
-     WHERE id IN (
-           SELECT id
-             FROM queueing_scheduled_action
-            WHERE status = 'pending'
-              AND run_at <= now()
-            ORDER BY run_at
-            LIMIT %s
-              FOR UPDATE SKIP LOCKED
-           )
-    RETURNING *
+      FROM picked
+     WHERE action.id = picked.id
+    RETURNING action.*
 """
 
 
@@ -175,10 +186,9 @@ def claim_batch(limit: int = DEFAULT_BATCH_SIZE) -> list[ScheduledAction]:
     # Cross-tenant on purpose: this is the deployment-wide drain. See the module
     # docstring. Application code reads ScheduledAction through .for_workspace().
     claimed = list(ScheduledAction.objects.raw(CLAIM_SQL, [limit]))
-    # The subquery orders by run_at, but RETURNING has no guaranteed order, so
-    # without this the *oldest* row in a batch could be processed last. Sorting
-    # in Python keeps the claim statement the one SPEC §15 writes down.
-    claimed.sort(key=lambda action: action.run_at)
+    # RETURNING has no guaranteed order. Keep deterministic processing inside
+    # the claimed set; fairness is decided before the UPDATE by workspace lanes.
+    claimed.sort(key=lambda action: (action.run_at, action.pk))
     return claimed
 
 
@@ -274,6 +284,24 @@ def _record_failure(action: ScheduledAction, message: str, *, permanent: bool) -
     return str(action.status)
 
 
+def _record_backpressure(action: ScheduledAction, message: str) -> str:
+    """Defer capacity pressure without spending the action's retry budget.
+
+    Claiming increments attempts before the handler runs. Admission pressure is
+    not a failed attempt at the handler's work; it means the owning workspace
+    must drain existing active rows first. Give that claim back, delay it by the
+    first normal backoff rung to avoid a hot loop, and keep a bounded diagnostic
+    for operators.
+    """
+    action.status = ActionStatus.PENDING
+    action.attempts = max(0, action.attempts - 1)
+    action.run_at = timezone.now() + timedelta(seconds=BACKOFF_SCHEDULE[0])
+    action.last_error = _storable(message)
+    with transaction.atomic():
+        action.save(update_fields=["status", "attempts", "run_at", "last_error", "updated_at"])
+    return str(action.status)
+
+
 def process_action(action: ScheduledAction) -> str:
     """Run one claimed action. Returns its resulting status.
 
@@ -302,6 +330,18 @@ def process_action(action: ScheduledAction) -> str:
         with transaction.atomic(), lock:
             handler(action.payload, action)
             _mark_done(action)
+    except QueueAdmissionLimitError as exc:
+        elapsed_ms = int((time.monotonic() - started) * 1000)
+        status = _record_backpressure(action, _error_text(exc))
+        logger.warning(
+            "Queue action deferred by workspace admission id=%s type=%s attempts=%s/%s duration_ms=%s",
+            action.pk,
+            action.type,
+            action.attempts,
+            action.max_attempts,
+            elapsed_ms,
+        )
+        return status
     except Exception as exc:  # noqa: BLE001 - a handler must not be able to kill the worker
         elapsed_ms = int((time.monotonic() - started) * 1000)
         status = _record_failure(action, _error_text(exc), permanent=False)

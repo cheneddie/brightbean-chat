@@ -39,13 +39,14 @@ import re
 import secrets
 from dataclasses import dataclass
 
-from apps.common.encryption import hmac_digest
+from apps.common.encryption import hmac_digest, hmac_digest_candidates
 
 __all__ = [
     "LOOKUP_LENGTH",
     "TOKEN_PREFIX",
     "MintedKey",
     "digest_for",
+    "digest_candidates_for",
     "lookup_for",
     "mint",
     "parse",
@@ -86,6 +87,11 @@ def lookup_for(secret: str) -> str:
 def digest_for(secret: str) -> str:
     """The stored, queryable fingerprint of a token's secret part."""
     return hmac_digest(secret)
+
+
+def digest_candidates_for(secret: str) -> tuple[str, ...]:
+    """Current API-key digest followed by configured fallback generations."""
+    return hmac_digest_candidates(secret)
 
 
 def mint() -> MintedKey:

@@ -74,51 +74,73 @@ def _hkdf(secret: bytes, salt: bytes) -> bytes:
     ).derive(secret)
 
 
-def _derive_key() -> bytes:
-    """Derive a 256-bit encryption key from SECRET_KEY via HKDF-SHA256."""
-    secret = settings.SECRET_KEY.encode("utf-8")
-    salt = getattr(settings, "ENCRYPTION_KEY_SALT", None)
-    if not salt:
+def _normalise_salt(value: Any) -> bytes:
+    if not value:
         raise ValueError(
             "ENCRYPTION_KEY_SALT must be set. Generate a random value and add it "
             "to your environment variables. This is required for secure encryption."
         )
-    if isinstance(salt, str):
-        salt = salt.encode("utf-8")
+    return value.encode("utf-8") if isinstance(value, str) else bytes(value)
+
+
+def _primary_material() -> tuple[bytes, bytes]:
+    return settings.SECRET_KEY.encode("utf-8"), _normalise_salt(getattr(settings, "ENCRYPTION_KEY_SALT", None))
+
+
+def _fallback_materials() -> tuple[tuple[bytes, bytes], ...]:
+    materials: list[tuple[bytes, bytes]] = []
+    for item in getattr(settings, "ENCRYPTION_KEY_FALLBACKS", ()) or ():
+        if not isinstance(item, dict):
+            continue
+        secret = str(item.get("secret_key") or "").encode("utf-8")
+        salt_value = item.get("salt")
+        if not secret or not salt_value:
+            continue
+        materials.append((secret, _normalise_salt(salt_value)))
+    return tuple(materials)
+
+
+def _derive_key() -> bytes:
+    """Derive the primary 256-bit encryption key."""
+    secret, salt = _primary_material()
     return _hkdf(secret, salt)
 
 
-def hmac_digest(value: str) -> str:
-    """A deterministic, queryable fingerprint of a secret.
+def _decryption_keys() -> tuple[bytes, ...]:
+    """Primary key first, then unique previous generations."""
+    pairs = (_primary_material(), *_fallback_materials())
+    keys: list[bytes] = []
+    for secret, salt in pairs:
+        key = _hkdf(secret, salt)
+        if key not in keys:
+            keys.append(key)
+    return tuple(keys)
 
-    Encrypted columns cannot be filtered (see above), so a table that has to be
-    looked up *by* a credential — an invitation token arriving in a URL, a
-    webhook secret arriving in a header — stores this alongside, or instead of,
-    the value itself.
 
-    HMAC-SHA256 keyed on a value derived from ``SECRET_KEY``, not a bare hash:
-    an unkeyed digest of a token is offline-guessable at whatever rate the
-    token's entropy allows, and gives an attacker holding a database dump a
-    verification oracle. Keyed, the dump alone is useless.
-
-    Deterministic by design, which is the whole point — the same input always
-    produces the same digest, so it can carry a unique constraint and an index.
-    """
-    key = _hkdf(settings.SECRET_KEY.encode("utf-8"), _digest_salt())
+def _digest_for_material(value: str, secret: bytes, salt: bytes) -> str:
+    key = _hkdf(secret, salt + HKDF_DIGEST_INFO)
     return hmac.new(key, value.encode("utf-8"), hashlib.sha256).hexdigest()
 
 
-def _digest_salt() -> bytes:
-    """The HKDF salt for lookup digests. Same source as the encryption salt."""
-    salt = getattr(settings, "ENCRYPTION_KEY_SALT", None)
-    if not salt:
-        raise ValueError(
-            "ENCRYPTION_KEY_SALT must be set. Generate a random value and add it "
-            "to your environment variables. This is required for secure encryption."
-        )
-    if isinstance(salt, str):
-        salt = salt.encode("utf-8")
-    return salt + HKDF_DIGEST_INFO
+def hmac_digest(value: str) -> str:
+    """The deterministic lookup digest under the current key generation."""
+    secret, salt = _primary_material()
+    return _digest_for_material(value, secret, salt)
+
+
+def hmac_digest_candidates(value: str) -> tuple[str, ...]:
+    """Current lookup digest followed by unique fallback-generation digests.
+
+    Readers use this during key rotation so an existing opaque token remains
+    valid while new writes immediately move to the primary key generation.
+    """
+    pairs = (_primary_material(), *_fallback_materials())
+    digests: list[str] = []
+    for secret, salt in pairs:
+        digest = _digest_for_material(value, secret, salt)
+        if digest not in digests:
+            digests.append(digest)
+    return tuple(digests)
 
 
 def encrypt_value(plaintext: str) -> str:
@@ -131,13 +153,19 @@ def encrypt_value(plaintext: str) -> str:
 
 
 def decrypt_value(encrypted: str) -> str:
-    """Decrypt a base64-encoded nonce+ciphertext string."""
-    key = _derive_key()
-    aesgcm = AESGCM(key)
+    """Decrypt with the current key, then configured previous generations."""
     raw = base64.b64decode(encrypted)
     nonce = raw[:NONCE_BYTES]
     ciphertext = raw[NONCE_BYTES:]
-    return aesgcm.decrypt(nonce, ciphertext, None).decode("utf-8")
+    last_error: InvalidTag | None = None
+    for key in _decryption_keys():
+        try:
+            return AESGCM(key).decrypt(nonce, ciphertext, None).decode("utf-8")
+        except InvalidTag as exc:
+            last_error = exc
+    if last_error is not None:
+        raise last_error
+    raise InvalidTag
 
 
 class EncryptedTextField(models.TextField):

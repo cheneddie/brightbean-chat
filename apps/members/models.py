@@ -18,7 +18,7 @@ from django.conf import settings
 from django.db import models
 from django.utils import timezone
 
-from apps.common.encryption import hmac_digest
+from apps.common.encryption import hmac_digest, hmac_digest_candidates
 from apps.common.managers import OrgScopedManager
 from apps.common.models import BaseModel
 from apps.members.roles import OrgRole, WorkspaceRole, permissions_for_role
@@ -44,7 +44,7 @@ class InvitationManager(OrgScopedManager):
         """
         if not token:
             return self.none()
-        return self.filter(token_digest=hmac_digest(token))
+        return self.filter(token_digest__in=hmac_digest_candidates(token))
 
 
 class OrgMembership(BaseModel):
