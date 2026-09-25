@@ -81,23 +81,27 @@ def parse_signed_request(signed_request: str, *, app_secret: str) -> dict[str, A
 
 
 def delete_connected_instagram_account(user_id: str) -> int:
-    """Delete the one connection identified by Meta, idempotently.
+    """Delete every Instagram connection belonging to this Meta lifecycle user.
 
-    ChannelConnection has a deployment-wide unique (platform, external_id), so
-    the result is 0 or 1. Existing foreign-key cascades remove the connection's
-    conversations, trigger bindings and channel identities. CRM Contact rows
-    are not globally erased: the callback represents the connected business
-    account, not every third party who has ever messaged that business.
+    ``signed_request.user_id`` is an app-scoped lifecycle identity, not a
+    routing key. It must never be compared with ``external_id``: that column
+    names the Instagram professional account used by webhook routing and the
+    two identities are not contractually interchangeable.
+
+    A single Meta user may have authorised more than one professional account,
+    so all matching connections are removed. Existing foreign-key cascades
+    remove each connection's conversations, trigger bindings and channel
+    identities. CRM Contact rows are not globally erased: those are third
+    parties who messaged the connected businesses.
     """
-    connection = (
-        ChannelConnection.objects.unscoped()
-        .filter(platform=Platform.INSTAGRAM.value, external_id=user_id)
-        .first()
+    connections = ChannelConnection.objects.unscoped().filter(
+        platform=Platform.INSTAGRAM.value,
+        meta_app_scoped_user_id=user_id,
     )
-    if connection is None:
-        return 0
-    connection.delete()
-    return 1
+    count = connections.count()
+    if count:
+        connections.delete()
+    return int(count)
 
 
 def create_deletion_receipt(*, deleted_connections: int) -> tuple[str, MetaDataDeletionReceipt]:
