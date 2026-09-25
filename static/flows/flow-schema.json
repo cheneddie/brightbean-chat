@@ -993,10 +993,10 @@
           "type": "string"
         },
         "sourceHandle": {
-          "description": "default | btn:<id> | qr:<id> | cond:true | cond:false | rand:<id> | timeout | error",
+          "description": "default | btn:<id> | qr:<id> | cond:true | cond:false | follow:<status> | rand:<id> | timeout | error",
           "maxLength": 70,
           "minLength": 1,
-          "pattern": "^(?:default|timeout|error|cond:(?:true|false)|(?:btn|qr|rand):[A-Za-z0-9_-]{1,64})$",
+          "pattern": "^(?:default|timeout|error|cond:(?:true|false)|follow:(?:following|not_following|unknown)|(?:btn|qr|rand):[A-Za-z0-9_-]{1,64})$",
           "type": "string"
         },
         "target": {
@@ -1202,6 +1202,7 @@
           "condition": "#/$defs/node_condition",
           "data_collection": "#/$defs/node_data_collection",
           "external_request": "#/$defs/node_external_request",
+          "instagram_follow_gate": "#/$defs/node_instagram_follow_gate",
           "note": "#/$defs/node_note",
           "randomizer": "#/$defs/node_randomizer",
           "send_email": "#/$defs/node_send_email",
@@ -1221,6 +1222,9 @@
         },
         {
           "$ref": "#/$defs/node_start_flow"
+        },
+        {
+          "$ref": "#/$defs/node_instagram_follow_gate"
         },
         {
           "$ref": "#/$defs/node_condition"
@@ -1501,6 +1505,47 @@
         },
         "type": {
           "const": "external_request",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "type",
+        "position",
+        "config"
+      ],
+      "type": "object"
+    },
+    "node_instagram_follow_gate": {
+      "additionalProperties": false,
+      "description": "Checks whether this Instagram contact follows the connected professional account.",
+      "properties": {
+        "config": {
+          "additionalProperties": false,
+          "properties": {
+            "unknown_policy": {
+              "description": "What to do when Instagram cannot reliably return follow status. Defaults to fail_open.",
+              "enum": [
+                "fail_open",
+                "fail_closed",
+                "ask_again"
+              ],
+              "type": "string"
+            }
+          },
+          "type": "object"
+        },
+        "id": {
+          "maxLength": 64,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9_-]{1,64}$",
+          "type": "string"
+        },
+        "position": {
+          "$ref": "#/$defs/position"
+        },
+        "type": {
+          "const": "instagram_follow_gate",
           "type": "string"
         }
       },
@@ -2210,6 +2255,20 @@
         "label": "Hand over to another flow",
         "terminal": true,
         "type": "start_flow"
+      },
+      {
+        "annotation": false,
+        "description": "Checks whether this Instagram contact follows the connected professional account.",
+        "dynamic_handles": [],
+        "group": "logic",
+        "handles": [
+          "follow:following",
+          "follow:not_following",
+          "follow:unknown"
+        ],
+        "label": "Check Instagram follow",
+        "terminal": false,
+        "type": "instagram_follow_gate"
       },
       {
         "annotation": false,

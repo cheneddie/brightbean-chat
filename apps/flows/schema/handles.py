@@ -22,6 +22,7 @@ __all__ = [
     "COND_VALUES",
     "HANDLE_PATTERN",
     "DYNAMIC_PREFIXES",
+    "FOLLOW_VALUES",
     "STATIC_HANDLES",
     "Handle",
     "format_handle",
@@ -34,6 +35,9 @@ STATIC_HANDLES = ("default", "timeout", "error")
 #: The two branches of a condition node (SPEC §11.4).
 COND_VALUES = ("true", "false")
 
+#: The three branches of the Instagram follow gate.
+FOLLOW_VALUES = ("following", "not_following", "unknown")
+
 #: Prefixes whose id comes from the node's own config.
 DYNAMIC_PREFIXES = ("btn", "qr", "rand")
 
@@ -43,7 +47,7 @@ DYNAMIC_PREFIXES = ("btn", "qr", "rand")
 # an id would make "btn:a:b" ambiguous.
 #: Exported so the generated schema constrains ``sourceHandle`` to the same
 #: grammar this module parses, instead of describing it only in prose.
-HANDLE_PATTERN = r"^(?:default|timeout|error|cond:(?:true|false)|(?:btn|qr|rand):[A-Za-z0-9_-]{1,64})$"
+HANDLE_PATTERN = r"^(?:default|timeout|error|cond:(?:true|false)|follow:(?:following|not_following|unknown)|(?:btn|qr|rand):[A-Za-z0-9_-]{1,64})$"
 
 _HANDLE_RE = re.compile(HANDLE_PATTERN)
 

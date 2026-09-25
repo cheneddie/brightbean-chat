@@ -13,7 +13,7 @@ import { nodeSpec } from "./artifact";
 import type { NodeTypeSpec } from "./types";
 
 /** apps/flows/schema/handles.py::HANDLE_PATTERN, verbatim. */
-export const HANDLE_PATTERN = /^(?:default|timeout|error|cond:(?:true|false)|(?:btn|qr|rand):[A-Za-z0-9_-]{1,64})$/;
+export const HANDLE_PATTERN = /^(?:default|timeout|error|cond:(?:true|false)|follow:(?:following|not_following|unknown)|(?:btn|qr|rand):[A-Za-z0-9_-]{1,64})$/;
 
 /** apps/flows/schema/envelope.py::ID_PATTERN, verbatim. */
 export const ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
