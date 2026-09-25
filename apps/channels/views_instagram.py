@@ -223,7 +223,9 @@ def _complete(request: Any, workspace: Any, code: str) -> str:
         return NO_CREDENTIALS
 
     try:
-        short_lived, _ = oauth.exchange_code(code=code, client_id=client_id, client_secret=client_secret)
+        short_lived, meta_app_scoped_user_id = oauth.exchange_code(
+            code=code, client_id=client_id, client_secret=client_secret
+        )
         token, expires_at = oauth.exchange_for_long_lived(token=short_lived, client_secret=client_secret)
         profile = oauth.account_profile(token)
     except APIError:
@@ -251,6 +253,7 @@ def _complete(request: Any, workspace: Any, code: str) -> str:
         platform=Platform.INSTAGRAM.value,
         display_name=f"@{profile['username']}"[:200],
         external_id=profile["user_id"],
+        meta_app_scoped_user_id=meta_app_scoped_user_id[:200],
         status=ConnectionStatus.ACTIVE,
     )
     oauth.store_credentials(connection, token=token, expires_at=expires_at, user_id=profile["user_id"])
@@ -263,7 +266,7 @@ def _complete(request: Any, workspace: Any, code: str) -> str:
         with transaction.atomic():
             connection.save()
     except IntegrityError:
-        existing = _reconnect(workspace, profile, token, expires_at)
+        existing = _reconnect(workspace, profile, token, expires_at, meta_app_scoped_user_id)
         if existing is not None:
             messages.success(request, f"Reconnected {connection.display_name}.")
             return ""
@@ -280,7 +283,13 @@ def _complete(request: Any, workspace: Any, code: str) -> str:
     return ""
 
 
-def _reconnect(workspace: Any, profile: dict[str, str], token: str, expires_at: Any) -> ChannelConnection | None:
+def _reconnect(
+    workspace: Any,
+    profile: dict[str, str],
+    token: str,
+    expires_at: Any,
+    meta_app_scoped_user_id: str,
+) -> ChannelConnection | None:
     """Refresh **this workspace's** existing row for the same account, if any.
 
     Reconnecting is the ordinary way out of ``needs_reauth``, and it has to work
@@ -302,8 +311,17 @@ def _reconnect(workspace: Any, profile: dict[str, str], token: str, expires_at: 
         return None
     oauth.store_credentials(connection, token=token, expires_at=expires_at, user_id=profile["user_id"])
     connection.display_name = f"@{profile['username']}"[:200]
+    connection.meta_app_scoped_user_id = meta_app_scoped_user_id[:200]
     connection.status = ConnectionStatus.ACTIVE
-    connection.save(update_fields=["credentials", "display_name", "status", "updated_at"])
+    connection.save(
+        update_fields=[
+            "credentials",
+            "display_name",
+            "meta_app_scoped_user_id",
+            "status",
+            "updated_at",
+        ]
+    )
     logger.info("Instagram connection %s was reconnected.", connection.pk)
     return connection
 
