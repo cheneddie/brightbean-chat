@@ -46,7 +46,7 @@ from django.utils import timezone
 from apps.common.logging import scrub
 from apps.queueing.locks import contact_lock
 from apps.queueing.models import ActionStatus, ScheduledAction
-from apps.queueing.registry import get_handler, registered_types
+from apps.queueing.registry import QueueAdmissionLimitError, get_handler, registered_types
 
 __all__ = [
     "BACKOFF_SCHEDULE",
@@ -284,6 +284,24 @@ def _record_failure(action: ScheduledAction, message: str, *, permanent: bool) -
     return str(action.status)
 
 
+def _record_backpressure(action: ScheduledAction, message: str) -> str:
+    """Defer capacity pressure without spending the action's retry budget.
+
+    Claiming increments attempts before the handler runs. Admission pressure is
+    not a failed attempt at the handler's work; it means the owning workspace
+    must drain existing active rows first. Give that claim back, delay it by the
+    first normal backoff rung to avoid a hot loop, and keep a bounded diagnostic
+    for operators.
+    """
+    action.status = ActionStatus.PENDING
+    action.attempts = max(0, action.attempts - 1)
+    action.run_at = timezone.now() + timedelta(seconds=BACKOFF_SCHEDULE[0])
+    action.last_error = _storable(message)
+    with transaction.atomic():
+        action.save(update_fields=["status", "attempts", "run_at", "last_error", "updated_at"])
+    return str(action.status)
+
+
 def process_action(action: ScheduledAction) -> str:
     """Run one claimed action. Returns its resulting status.
 
@@ -312,6 +330,18 @@ def process_action(action: ScheduledAction) -> str:
         with transaction.atomic(), lock:
             handler(action.payload, action)
             _mark_done(action)
+    except QueueAdmissionLimitError as exc:
+        elapsed_ms = int((time.monotonic() - started) * 1000)
+        status = _record_backpressure(action, _error_text(exc))
+        logger.warning(
+            "Queue action deferred by workspace admission id=%s type=%s attempts=%s/%s duration_ms=%s",
+            action.pk,
+            action.type,
+            action.attempts,
+            action.max_attempts,
+            elapsed_ms,
+        )
+        return status
     except Exception as exc:  # noqa: BLE001 - a handler must not be able to kill the worker
         elapsed_ms = int((time.monotonic() - started) * 1000)
         status = _record_failure(action, _error_text(exc), permanent=False)
