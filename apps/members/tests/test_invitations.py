@@ -245,9 +245,7 @@ class TestResendAndRevoke:
 
         settings.SECRET_KEY = "new-invite-secret-for-rotation-tests"
         settings.ENCRYPTION_KEY_SALT = b"new-invite-salt-for-rotation-tests"
-        settings.ENCRYPTION_KEY_FALLBACKS = [
-            {"secret_key": old_secret, "salt": old_salt.decode("utf-8")}
-        ]
+        settings.ENCRYPTION_KEY_FALLBACKS = [{"secret_key": old_secret, "salt": old_salt.decode("utf-8")}]
 
         assert token is not None
         assert Invitation.objects.for_token(token).get() == invitation
