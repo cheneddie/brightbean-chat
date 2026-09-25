@@ -100,9 +100,7 @@ class TestBearerResolution:
 
         settings.SECRET_KEY = "new-api-key-secret-for-rotation-tests"
         settings.ENCRYPTION_KEY_SALT = b"new-api-key-salt-for-rotation-tests"
-        settings.ENCRYPTION_KEY_FALLBACKS = [
-            {"secret_key": old_secret, "salt": old_salt.decode("utf-8")}
-        ]
+        settings.ENCRYPTION_KEY_FALLBACKS = [{"secret_key": old_secret, "salt": old_salt.decode("utf-8")}]
 
         assert client.get(CONTACTS, **bearer(plaintext)).status_code == 200
         key.refresh_from_db()
