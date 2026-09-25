@@ -126,4 +126,4 @@ def receipt_for_code(code: str) -> MetaDataDeletionReceipt | None:
 
 def _b64url_decode(value: str) -> bytes:
     padding = "=" * (-len(value) % 4)
-    return base64.urlsafe_b64decode((value + padding).encode("ascii"))
+    return base64.b64decode((value + padding).encode("ascii"), altchars=b"-_", validate=True)
