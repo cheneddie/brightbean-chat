@@ -502,6 +502,25 @@ register_node_type(
 
 register_node_type(
     NodeSpec(
+        type="human_handoff",
+        label="Hand off to a person",
+        description="Opens the inbox conversation, optionally assigns a teammate, and stops this flow.",
+        group="actions",
+        config=f.obj(
+            {
+                "member": f.string(
+                    max_length=64,
+                    description="Optional workspace member to assign. Leave blank for the shared inbox.",
+                )
+            }
+        ),
+        handles=(),
+        terminal=True,
+    )
+)
+
+register_node_type(
+    NodeSpec(
         type="start_flow",
         label="Hand over to another flow",
         description="Hands over to another flow. This one stops here.",

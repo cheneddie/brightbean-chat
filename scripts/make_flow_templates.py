@@ -81,6 +81,11 @@ def act(node_id: str, *actions: dict[str, Any]) -> dict[str, Any]:
     return {"id": node_id, "type": "action", "config": {"actions": list(actions)}}
 
 
+def handoff(node_id: str) -> dict[str, Any]:
+    """Terminal step: open the inbox thread for a person and stop this flow."""
+    return {"id": node_id, "type": "human_handoff", "config": {}}
+
+
 def wait(node_id: str, value: int, unit: str = "hours") -> dict[str, Any]:
     return {
         "id": node_id,
@@ -538,13 +543,14 @@ TEMPLATES: list[dict[str, Any]] = [
         "nodes": [
             send("ack", text("Of course - putting you through to a person now.")),
             act("flag", tag("Needs a person")),
+            handoff("handoff"),
             note(
                 "advice",
-                "Assign this to whoever is on the inbox today. The Action step "
-                "can notify them as well as tag the conversation.",
+                "The Hand off to a person step opens the shared inbox and ends this automation. "
+                "Pick a teammate on that step if one person should own these conversations.",
             ),
         ],
-        "edges": chain("ack", "flag"),
+        "edges": chain("ack", "flag", "handoff"),
     },
     {
         "slug": "feedback-after-a-purchase",

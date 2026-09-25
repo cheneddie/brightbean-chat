@@ -224,6 +224,26 @@ function ExternalRequestPreview({ config }: PreviewProps) {
   );
 }
 
+function InstagramFollowGatePreview({ config }: PreviewProps) {
+  const policy = isRecord(config) ? String(config["unknown_policy"] ?? "fail_open") : "fail_open";
+  const copy: Record<string, string> = {
+    fail_open: "Unknown → continue",
+    fail_closed: "Unknown → not following",
+    ask_again: "Unknown → ask again",
+  };
+  return <p>{copy[policy] ?? "Unknown → continue"}</p>;
+}
+
+
+function HumanHandoffPreview({ config, picklists }: PreviewProps) {
+  const id = isRecord(config) ? String(config["member"] ?? "") : "";
+  if (!id) {
+    return <p>Shared inbox</p>;
+  }
+  const member = picklists.members.find((item) => item.id === id);
+  return member ? <p>Assign to {member.label}</p> : <Empty>Unknown teammate</Empty>;
+}
+
 function StartFlowPreview({ config, picklists }: PreviewProps) {
   const id = isRecord(config) ? String(config["flow_id"] ?? "") : "";
   const target = picklists.flows.find((flow) => flow.id === id);
@@ -273,9 +293,11 @@ const PREVIEWS: Record<string, (props: PreviewProps) => ReactNode> = {
   condition: ConditionPreview,
   randomizer: RandomizerPreview,
   action: ActionPreview,
+  human_handoff: HumanHandoffPreview,
   smart_delay: SmartDelayPreview,
   data_collection: DataCollectionPreview,
   external_request: ExternalRequestPreview,
+  instagram_follow_gate: InstagramFollowGatePreview,
   start_flow: StartFlowPreview,
   send_sms: TextFieldPreview("text"),
   send_email: TextFieldPreview("subject"),

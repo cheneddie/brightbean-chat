@@ -1202,6 +1202,7 @@
           "condition": "#/$defs/node_condition",
           "data_collection": "#/$defs/node_data_collection",
           "external_request": "#/$defs/node_external_request",
+          "human_handoff": "#/$defs/node_human_handoff",
           "instagram_follow_gate": "#/$defs/node_instagram_follow_gate",
           "note": "#/$defs/node_note",
           "randomizer": "#/$defs/node_randomizer",
@@ -1219,6 +1220,9 @@
         },
         {
           "$ref": "#/$defs/node_action"
+        },
+        {
+          "$ref": "#/$defs/node_human_handoff"
         },
         {
           "$ref": "#/$defs/node_start_flow"
@@ -1505,6 +1509,43 @@
         },
         "type": {
           "const": "external_request",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "type",
+        "position",
+        "config"
+      ],
+      "type": "object"
+    },
+    "node_human_handoff": {
+      "additionalProperties": false,
+      "description": "Opens the inbox conversation, optionally assigns a teammate, and stops this flow.",
+      "properties": {
+        "config": {
+          "additionalProperties": false,
+          "properties": {
+            "member": {
+              "description": "Optional workspace member to assign. Leave blank for the shared inbox.",
+              "maxLength": 64,
+              "type": "string"
+            }
+          },
+          "type": "object"
+        },
+        "id": {
+          "maxLength": 64,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9_-]{1,64}$",
+          "type": "string"
+        },
+        "position": {
+          "$ref": "#/$defs/position"
+        },
+        "type": {
+          "const": "human_handoff",
           "type": "string"
         }
       },
@@ -2245,6 +2286,16 @@
         "label": "Tag, save or assign",
         "terminal": false,
         "type": "action"
+      },
+      {
+        "annotation": false,
+        "description": "Opens the inbox conversation, optionally assigns a teammate, and stops this flow.",
+        "dynamic_handles": [],
+        "group": "actions",
+        "handles": [],
+        "label": "Hand off to a person",
+        "terminal": true,
+        "type": "human_handoff"
       },
       {
         "annotation": false,

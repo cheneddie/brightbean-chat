@@ -11,6 +11,12 @@
             "source": "ack",
             "sourceHandle": "default",
             "target": "flag"
+          },
+          {
+            "id": "flag-default-handoff",
+            "source": "flag",
+            "sourceHandle": "default",
+            "target": "handoff"
           }
         ],
         "nodes": [
@@ -47,12 +53,21 @@
             "type": "action"
           },
           {
+            "config": {},
+            "id": "handoff",
+            "position": {
+              "x": 600,
+              "y": 0
+            },
+            "type": "human_handoff"
+          },
+          {
             "config": {
-              "text": "Assign this to whoever is on the inbox today. The Action step can notify them as well as tag the conversation."
+              "text": "The Hand off to a person step opens the shared inbox and ends this automation. Pick a teammate on that step if one person should own these conversations."
             },
             "id": "advice",
             "position": {
-              "x": 600,
+              "x": 900,
               "y": 0
             },
             "type": "note"

@@ -45,6 +45,7 @@ NODE_CONFIGS: dict[str, dict[str, Any]] = {
         ]
     },
     "start_flow": {"flow_id": "0192f000-0000-7000-8000-000000000001"},
+    "human_handoff": {},
     # A condition rule's `key` is the referenced object's **id**, not its name:
     # apps.contacts.conditions owns CONDITION_SCHEMA (contract 8) and specifies
     # a UUID so that renaming a tag cannot break every flow and segment that

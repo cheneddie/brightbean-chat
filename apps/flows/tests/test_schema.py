@@ -22,6 +22,7 @@ from apps.flows.schema.nodes import NodeSpec, all_defs
 SPEC_NODE_TYPES = {
     "send_message",
     "action",
+    "human_handoff",
     "start_flow",
     "condition",
     "instagram_follow_gate",

@@ -69,6 +69,12 @@ export function handleLabel(handle: string, config: unknown): string {
       return "Yes";
     case "cond:false":
       return "No";
+    case "follow:following":
+      return "Following";
+    case "follow:not_following":
+      return "Not following";
+    case "follow:unknown":
+      return "Unknown";
     // The trigger card's one edge. Unlabelled: the card it leaves already says
     // "When", and the step it reaches is badged "Starts here", so a word on the
     // line between them would be the third telling. Not a graph handle — see

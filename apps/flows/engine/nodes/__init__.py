@@ -17,6 +17,7 @@ from apps.flows.engine.nodes.base import Node
 from apps.flows.engine.nodes.condition import ConditionNode
 from apps.flows.engine.nodes.data_collection import DataCollectionNode
 from apps.flows.engine.nodes.external_request import ExternalRequestNode
+from apps.flows.engine.nodes.human_handoff import HumanHandoffNode
 from apps.flows.engine.nodes.instagram_follow_gate import InstagramFollowGateNode
 from apps.flows.engine.nodes.note import NoteNode
 from apps.flows.engine.nodes.randomizer import RandomizerNode
@@ -30,6 +31,7 @@ __all__ = [
     "ConditionNode",
     "DataCollectionNode",
     "ExternalRequestNode",
+    "HumanHandoffNode",
     "InstagramFollowGateNode",
     "Node",
     "NoteNode",

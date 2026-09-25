@@ -52,6 +52,7 @@ describe("sourceHandles", () => {
 
   it("gives a terminal node and an annotation none at all", () => {
     expect(sourceHandles(spec("start_flow"), { flow_id: "f" })).toEqual([]);
+    expect(sourceHandles(spec("human_handoff"), {})).toEqual([]);
     expect(sourceHandles(spec("note"), { text: "hi" })).toEqual([]);
   });
 
@@ -79,6 +80,9 @@ describe("handleLabel", () => {
     ["error", "Error"],
     ["cond:true", "Yes"],
     ["cond:false", "No"],
+    ["follow:following", "Following"],
+    ["follow:not_following", "Not following"],
+    ["follow:unknown", "Unknown"],
     ["btn:a", "Book a call"],
     ["qr:q", "Later"],
     ["rand:p", "30%"],
