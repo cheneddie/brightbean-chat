@@ -5,7 +5,6 @@ from typing import Any
 from django.apps import apps
 from django.conf import settings
 from django.core.management.base import BaseCommand, CommandError
-from django.db import models
 from django.utils import timezone
 
 from apps.common.encryption import EncryptedJSONField, EncryptedTextField, hmac_digest
