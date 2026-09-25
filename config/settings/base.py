@@ -374,6 +374,10 @@ TICK_TOKEN = env("TICK_TOKEN", default="")
 QUEUE_STATUS_OVERDUE_WARN_SECONDS = env.int("QUEUE_STATUS_OVERDUE_WARN_SECONDS", default=60)
 QUEUE_ZOMBIE_AFTER_SECONDS = env.int("QUEUE_ZOMBIE_AFTER_SECONDS", default=10 * 60)
 QUEUE_CONSUMER_HEARTBEAT_MAX_AGE_SECONDS = env.int("QUEUE_CONSUMER_HEARTBEAT_MAX_AGE_SECONDS", default=120)
+# Per-workspace active queue admission cap. pending + running rows count;
+# terminal history does not. <= 0 disables the cap for deliberate self-hosted
+# deployments that accept an unbounded tenant backlog.
+QUEUE_MAX_ACTIVE_PER_WORKSPACE = env.int("QUEUE_MAX_ACTIVE_PER_WORKSPACE", default=10_000)
 # Deployment-wide incident thresholds used by manage.py ops_snapshot.
 OPS_WEBHOOK_FAILURE_WINDOW_SECONDS = env.int("OPS_WEBHOOK_FAILURE_WINDOW_SECONDS", default=15 * 60)
 OPS_WEBHOOK_FAILURE_WARN_COUNT = env.int("OPS_WEBHOOK_FAILURE_WARN_COUNT", default=5)
