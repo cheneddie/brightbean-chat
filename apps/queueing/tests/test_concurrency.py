@@ -198,6 +198,7 @@ def test_concurrent_enqueue_cannot_overrun_workspace_admission_limit() -> None:
         == 25
     )
 
+
 @pytest.mark.django_db(transaction=True)
 def test_fair_claiming_remains_disjoint_across_concurrent_workers() -> None:
     noisy = create_tenancy("fair-noisy")
