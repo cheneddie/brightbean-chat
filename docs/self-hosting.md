@@ -617,6 +617,41 @@ with volume.
 On a host you control, `python manage.py tick` is the same drain as a one-shot
 command (55-second budget, sized for a once-a-minute cron).
 
+### Queue operational status
+
+When `TICK_TOKEN` is configured, the same credential also protects a read-only
+operations endpoint:
+
+```text
+https://<your-host>/internal/queue-status?token=<TICK_TOKEN>
+```
+
+Unlike `/internal/tick`, this endpoint **never drains or repairs the queue**.
+It reports:
+
+- due pending actions;
+- running actions;
+- running actions older than the zombie-recovery threshold;
+- terminal failures recorded in the last 24 hours;
+- age of the oldest already-due pending action.
+
+The JSON `status` is:
+
+- `ok` — no stale running work and no aged backlog/recent terminal failure;
+- `degraded` — backlog exceeded `QUEUE_STATUS_OVERDUE_WARN_SECONDS` (60 seconds
+  by default), or a terminal failure was recorded in the last 24 hours;
+- `error` — at least one running row is already older than zombie recovery.
+  This response is HTTP 503 so an uptime monitor can alert without parsing JSON.
+
+A degraded response remains HTTP 200 because a short burst or one isolated
+terminal failure should be visible without making an otherwise healthy web
+process fail its liveness check.
+
+**Known limitation:** queue state is not a worker heartbeat. An empty queue can
+look `ok` even when no worker/tick consumer is alive. D9 tracks an explicit
+consumer heartbeat separately; do not use this endpoint alone as proof that a
+background worker is running.
+
 ---
 
 ## Environment variables
@@ -799,6 +834,9 @@ job and CI enforces the automatable ones. These are yours:
       process do queue work.
 - [ ] **Watch `/healthz`** with something that will tell you. It fails closed on
       a database problem, which is the failure you want to hear about first.
+- [ ] **If `TICK_TOKEN` is configured, also watch `/internal/queue-status`.**
+      Alert on HTTP 503 immediately; treat `status=degraded` as an operator
+      warning and investigate aged backlog or recent terminal failures.
 
 Found a vulnerability in the software rather than in a deployment? See
 [`SECURITY.md`](../SECURITY.md).
