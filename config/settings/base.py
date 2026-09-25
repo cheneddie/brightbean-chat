@@ -339,6 +339,9 @@ SOCIALACCOUNT_ADAPTER = "apps.accounts.adapters.SocialAccountAdapter"
 # argued in apps/queueing/views.py: the caller is a third-party pinger holding
 # one static URL forever, so there is no expiry to sign in.
 TICK_TOKEN = env("TICK_TOKEN", default="")
+# Operational queue status marks an overdue due-row as degraded after this age.
+# A stale running row is always an error; this threshold only covers backlog.
+QUEUE_STATUS_OVERDUE_WARN_SECONDS = env.int("QUEUE_STATUS_OVERDUE_WARN_SECONDS", default=60)
 
 # ---------------------------------------------------------------------------
 # Outbound send rate (SPEC §8, §20) — apps.messaging.buckets
