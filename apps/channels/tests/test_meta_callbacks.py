@@ -15,6 +15,8 @@ from django.urls import reverse
 from apps.channels.meta_callbacks import parse_signed_request
 from apps.channels.models import ChannelConnection, MetaDataDeletionReceipt
 from apps.channels.tests.instagram_support import APP_SECRET, IG_ACCOUNT_ID
+from apps.common.platforms import Platform
+from tests.support import Tenancy, org_platform_credential
 
 META_APP_USER_ID = "99887766554433221"
 
@@ -161,6 +163,108 @@ class TestDataDeletionCallback:
 
         assert code not in raw
         assert META_APP_USER_ID not in raw
+
+
+@pytest.mark.django_db
+class TestOrganizationScopedCallbacks:
+    def _configure_org_app(self, tenancy: Tenancy, *, secret: str = "org-meta-secret") -> None:
+        org_platform_credential(
+            tenancy,
+            Platform.INSTAGRAM.value,
+            client_id=f"org-app-{tenancy.slug}",
+            client_secret=secret,
+        )
+
+    def test_byo_callback_uses_the_org_secret_even_when_env_app_is_configured(
+        self,
+        client: Client,
+        instagram_app: dict[str, str],
+        tenancy: Tenancy,
+        instagram_connection: ChannelConnection,
+    ) -> None:
+        self._configure_org_app(tenancy)
+        _bind_lifecycle(instagram_connection)
+        url = reverse(
+            "instagram_organization_data_deletion",
+            kwargs={"organization_id": tenancy.organization.pk},
+        )
+
+        wrong_namespace = _post(client, url, _signed_request(secret=APP_SECRET))
+        assert wrong_namespace.status_code == 403
+        assert ChannelConnection.objects.unscoped().filter(pk=instagram_connection.pk).exists()
+
+        accepted = _post(client, url, _signed_request(secret="org-meta-secret"))
+        assert accepted.status_code == 200
+        assert not ChannelConnection.objects.unscoped().filter(pk=instagram_connection.pk).exists()
+
+    def test_same_app_scoped_user_id_in_another_org_is_never_deleted(
+        self,
+        client: Client,
+        instagram_app: dict[str, str],
+        tenancy: Tenancy,
+        other_tenancy: Tenancy,
+        instagram_connection: ChannelConnection,
+    ) -> None:
+        self._configure_org_app(tenancy, secret="first-org-secret")
+        self._configure_org_app(other_tenancy, secret="second-org-secret")
+        _bind_lifecycle(instagram_connection)
+
+        other = ChannelConnection.objects.create(
+            workspace=other_tenancy.workspace,
+            platform=Platform.INSTAGRAM,
+            display_name="@other-org",
+            external_id="17841400000000991",
+            meta_app_scoped_user_id=META_APP_USER_ID,
+        )
+        url = reverse(
+            "instagram_organization_data_deletion",
+            kwargs={"organization_id": tenancy.organization.pk},
+        )
+
+        response = _post(client, url, _signed_request(secret="first-org-secret"))
+
+        assert response.status_code == 200
+        assert not ChannelConnection.objects.unscoped().filter(pk=instagram_connection.pk).exists()
+        assert ChannelConnection.objects.unscoped().filter(pk=other.pk).exists()
+        assert MetaDataDeletionReceipt.objects.get().deleted_connections == 1
+
+    def test_org_url_never_tries_another_organizations_secret(
+        self,
+        client: Client,
+        tenancy: Tenancy,
+        other_tenancy: Tenancy,
+        instagram_connection: ChannelConnection,
+    ) -> None:
+        self._configure_org_app(tenancy, secret="target-secret")
+        self._configure_org_app(other_tenancy, secret="foreign-secret")
+        _bind_lifecycle(instagram_connection)
+        url = reverse(
+            "instagram_organization_deauthorize",
+            kwargs={"organization_id": tenancy.organization.pk},
+        )
+
+        response = _post(client, url, _signed_request(secret="foreign-secret"))
+
+        assert response.status_code == 403
+        assert ChannelConnection.objects.unscoped().filter(pk=instagram_connection.pk).exists()
+
+    def test_org_callback_is_hidden_without_that_orgs_complete_credentials(
+        self,
+        client: Client,
+        instagram_app: dict[str, str],
+        tenancy: Tenancy,
+        instagram_connection: ChannelConnection,
+    ) -> None:
+        _bind_lifecycle(instagram_connection)
+        url = reverse(
+            "instagram_organization_data_deletion",
+            kwargs={"organization_id": tenancy.organization.pk},
+        )
+
+        response = _post(client, url, _signed_request(secret=APP_SECRET))
+
+        assert response.status_code == 404
+        assert ChannelConnection.objects.unscoped().filter(pk=instagram_connection.pk).exists()
 
 
 @pytest.mark.django_db
