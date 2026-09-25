@@ -41,9 +41,8 @@ def collect_snapshot(now: Any = None) -> OpsSnapshot:
     oldest_due_age = max(0, int((now - oldest_due).total_seconds())) if oldest_due else 0
     running = actions.filter(status="running")
 
-    from apps.queueing.housekeeping import ZOMBIE_AFTER
-
-    stale_running = running.filter(updated_at__lt=now - ZOMBIE_AFTER).count()
+    zombie_after = max(1, int(getattr(settings, "QUEUE_ZOMBIE_AFTER_SECONDS", 10 * 60)))
+    stale_running = running.filter(updated_at__lt=now - timedelta(seconds=zombie_after)).count()
     queue_failed = actions.filter(status="failed", updated_at__gte=now - timedelta(hours=24)).count()
 
     heartbeat = heartbeat_model._base_manager.filter(pk="queue").first()
