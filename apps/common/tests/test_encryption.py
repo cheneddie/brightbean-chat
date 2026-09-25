@@ -60,9 +60,7 @@ class TestValueHelpers:
 
         settings.SECRET_KEY = "new-primary-secret-for-rotation-tests"
         settings.ENCRYPTION_KEY_SALT = b"new-primary-salt-for-rotation-tests"
-        settings.ENCRYPTION_KEY_FALLBACKS = [
-            {"secret_key": old_secret, "salt": old_salt.decode("utf-8")}
-        ]
+        settings.ENCRYPTION_KEY_FALLBACKS = [{"secret_key": old_secret, "salt": old_salt.decode("utf-8")}]
 
         assert decrypt_value(ciphertext) == secret_value
 
@@ -71,9 +69,7 @@ class TestValueHelpers:
         old_salt = settings.ENCRYPTION_KEY_SALT
         settings.SECRET_KEY = "new-primary-secret-for-rotation-tests"
         settings.ENCRYPTION_KEY_SALT = b"new-primary-salt-for-rotation-tests"
-        settings.ENCRYPTION_KEY_FALLBACKS = [
-            {"secret_key": old_secret, "salt": old_salt.decode("utf-8")}
-        ]
+        settings.ENCRYPTION_KEY_FALLBACKS = [{"secret_key": old_secret, "salt": old_salt.decode("utf-8")}]
         ciphertext = encrypt_value(secret_value)
 
         settings.SECRET_KEY = old_secret
@@ -90,9 +86,7 @@ class TestValueHelpers:
 
         settings.SECRET_KEY = "new-primary-secret-for-rotation-tests"
         settings.ENCRYPTION_KEY_SALT = b"new-primary-salt-for-rotation-tests"
-        settings.ENCRYPTION_KEY_FALLBACKS = [
-            {"secret_key": old_secret, "salt": old_salt.decode("utf-8")}
-        ]
+        settings.ENCRYPTION_KEY_FALLBACKS = [{"secret_key": old_secret, "salt": old_salt.decode("utf-8")}]
 
         candidates = hmac_digest_candidates(value)
         assert candidates[0] == hmac_digest(value)
