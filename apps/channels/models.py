@@ -53,6 +53,7 @@ __all__ = [
     "EmailSuppression",
     "SuppressionReason",
     "FlowPreviewLink",
+    "MetaDataDeletionReceipt",
     "SmsSettings",
     "WebhookEventLog",
     "WebhookEventStatus",
@@ -103,6 +104,26 @@ class ConnectionStatus(models.TextChoices):
     NEEDS_REAUTH = "needs_reauth", "Needs reconnection"
     DISABLED = "disabled", "Disabled"
 
+
+class MetaDataDeletionReceipt(BaseModel):
+    """An anonymized receipt for one completed Meta data-deletion callback.
+
+    The plaintext confirmation code is returned once and never stored. The
+    Meta user id and signed_request are deliberately not persisted here: once
+    the matching connection is deleted, keeping a fresh identifier for the
+    person who asked to be forgotten would defeat the purpose of the callback.
+    """
+
+    confirmation_digest = models.CharField(max_length=64, unique=True)
+    platform = models.CharField(max_length=32, default=Platform.INSTAGRAM.value)
+    deleted_connections = models.PositiveSmallIntegerField(default=0)
+    completed_at = models.DateTimeField(default=timezone.now)
+
+    class Meta:
+        db_table = "channels_meta_data_deletion_receipt"
+
+    def __str__(self) -> str:
+        return f"{self.platform} deletion receipt {self.pk}"
 
 class WebhookEventStatus(models.TextChoices):
     """SPEC §5's ``webhook_event_log.status``."""
