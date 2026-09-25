@@ -10,6 +10,7 @@ from django.utils import timezone
 
 from apps.common.models import RateLimitCounter
 from apps.queueing.models import ActionStatus, ScheduledAction
+from apps.queueing.registry import QueueAdmissionLimitError
 from apps.queueing.tests.support import (
     advisory_lock_count,
     contact_lock_is_held,
@@ -191,6 +192,23 @@ class TestProcessAction:
         # First failure: 30 seconds out, give or take the test's own runtime.
         assert timedelta(seconds=29) <= action.run_at - before <= timedelta(seconds=31)
         assert "handler exploded" in action.last_error
+
+    def test_admission_backpressure_does_not_spend_retry_budget(self, tenancy: Tenancy) -> None:
+        def saturated(payload: dict[str, Any], action: ScheduledAction) -> None:
+            raise QueueAdmissionLimitError("workspace queue is full")
+
+        make_action(tenancy.workspace, type=PROBE, max_attempts=1)
+        with temporary_handler(PROBE, saturated):
+            before = timezone.now()
+            action = claim_batch()[0]
+            assert action.attempts == 1
+            assert process_action(action) == ActionStatus.PENDING
+
+        action.refresh_from_db()
+        assert action.status == ActionStatus.PENDING
+        assert action.attempts == 0
+        assert timedelta(seconds=29) <= action.run_at - before <= timedelta(seconds=31)
+        assert "QueueAdmissionLimitError" in action.last_error
 
     def test_a_failing_handlers_writes_are_rolled_back(self, tenancy: Tenancy) -> None:
         """The handler's transaction is the row's transaction: half-done work cannot commit."""
