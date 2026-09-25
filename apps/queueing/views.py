@@ -71,7 +71,8 @@ def _require_tick_token(request: HttpRequest) -> None:
 
 
 @csrf_exempt  # Token-authenticated, not session-authenticated: an external pinger has no CSRF cookie.
-def internal_tick(request: HttpRequest) -> HttpResponse:    """Drain the queue once. 404 unless the caller presents ``TICK_TOKEN``.
+def internal_tick(request: HttpRequest) -> HttpResponse:
+    """Drain the queue once. 404 unless the caller presents ``TICK_TOKEN``.
 
     The method check is inside the body, *after* the token check, rather than in
     a ``@require_http_methods`` decorator. A decorator runs first, so an
