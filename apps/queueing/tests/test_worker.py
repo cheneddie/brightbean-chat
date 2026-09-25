@@ -122,6 +122,29 @@ class TestClaim:
 
         assert claimed == {mine.pk, theirs.pk, system.pk}
 
+    def test_a_ten_thousand_row_workspace_cannot_starve_a_ten_row_workspace(
+        self, tenancy: Tenancy, other_tenancy: Tenancy
+    ) -> None:
+        noisy_due = timezone.now() - timedelta(minutes=2)
+        quiet_due = timezone.now() - timedelta(minutes=1)
+        ScheduledAction.objects.bulk_create(
+            ScheduledAction(workspace=tenancy.workspace, run_at=noisy_due, type=PROBE, payload={"n": n})
+            for n in range(10_000)
+        )
+        ScheduledAction.objects.bulk_create(
+            ScheduledAction(workspace=other_tenancy.workspace, run_at=quiet_due, type=PROBE, payload={"n": n})
+            for n in range(10)
+        )
+
+        claimed = claim_batch(50)
+        by_workspace: dict[Any, int] = {}
+        for action in claimed:
+            by_workspace[action.workspace_id] = by_workspace.get(action.workspace_id, 0) + 1
+
+        assert len(claimed) == 50
+        assert by_workspace[other_tenancy.workspace.pk] == 10
+        assert by_workspace[tenancy.workspace.pk] == 40
+
     @pytest.mark.parametrize("limit", [0, -1])
     def test_a_non_positive_limit_is_refused(self, tenancy: Tenancy, limit: int) -> None:
         """It used to return [], which is what made drain() spin forever."""
