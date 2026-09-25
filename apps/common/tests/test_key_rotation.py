@@ -18,9 +18,7 @@ def _rotate_settings(settings: Any) -> None:
     old_salt = settings.ENCRYPTION_KEY_SALT
     settings.SECRET_KEY = "new-primary-secret-for-command-rotation-tests"
     settings.ENCRYPTION_KEY_SALT = b"new-primary-salt-for-command-rotation-tests"
-    settings.ENCRYPTION_KEY_FALLBACKS = [
-        {"secret_key": old_secret, "salt": old_salt.decode("utf-8")}
-    ]
+    settings.ENCRYPTION_KEY_FALLBACKS = [{"secret_key": old_secret, "salt": old_salt.decode("utf-8")}]
     settings.SECRET_KEY_FALLBACKS = [old_secret]
 
 
@@ -74,9 +72,7 @@ class TestRotateEncryptedData:
         assert channel.webhook_secret_digest != old_digest
         assert ChannelConnection.resolve_by_webhook_secret(webhook_secret) == channel
 
-    def test_dry_run_does_not_rewrite_ciphertext(
-        self, settings: Any, secret_value: str
-    ) -> None:
+    def test_dry_run_does_not_rewrite_ciphertext(self, settings: Any, secret_value: str) -> None:
         probe = EncryptionProbe.objects.create(secret=secret_value)
         with db_connection.cursor() as cursor:
             cursor.execute(
