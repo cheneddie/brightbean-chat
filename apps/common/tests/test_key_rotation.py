@@ -1,7 +1,7 @@
 """Operational key-rotation integration tests."""
 
 from io import StringIO
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from django.core.management import call_command
@@ -9,8 +9,8 @@ from django.db import connection as db_connection
 
 from apps.channels.models import ChannelConnection
 from apps.common.platforms import Platform
-from tests.testapp.models import EncryptionProbe
 from tests.support import Tenancy
+from tests.testapp.models import EncryptionProbe
 
 
 def _rotate_settings(settings: Any) -> None:
@@ -31,7 +31,7 @@ class TestRotateEncryptedData:
     ) -> None:
         probe = EncryptionProbe.objects.create(
             secret=secret_value,
-            payload={"token": secret_value},
+            payload=cast(Any, {"token": secret_value}),
         )
         channel = ChannelConnection(
             workspace=tenancy.workspace,
