@@ -25,6 +25,7 @@ def _noop(payload: dict[str, Any], action: ScheduledAction) -> None:
 def url() -> str:
     return reverse("internal_tick")
 
+
 @pytest.fixture
 def status_url() -> str:
     return reverse("internal_queue_status")
@@ -204,6 +205,7 @@ class TestQueueStatus:
         assert body["consumer"]["source"] == "worker"
         assert body["consumer"]["age_seconds"] >= 120
         assert body["consumer"]["stale"] is True
+
     def test_it_is_hidden_without_the_shared_operations_token(
         self, client: Client, status_url: str, settings: Any
     ) -> None:
