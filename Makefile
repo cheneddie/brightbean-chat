@@ -1,6 +1,6 @@
 .PHONY: help setup frontend schema css-watch js-watch server worker migrate migrations test test-cov lint format typecheck audit \
         docker-up docker-down docker-build docker-logs \
-        prod-secrets prod-up prod-down prod-logs prod-migration-check prod-migrate prod-migration-verify smoke
+        prod-secrets prod-up prod-down prod-logs prod-migration-check prod-migrate prod-migration-verify prod-ops smoke
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-20s\033[0m %s\n", $$1, $$2}'
@@ -148,6 +148,9 @@ prod-migrate: ## Run migrations against the production stack (the upgrade step)
 
 prod-migration-verify: ## Prove production has no pending migrations after deploy
 	docker compose -f docker-compose.prod.yml run --rm migrate python manage.py migration_readiness --require-clean
+
+prod-ops: ## Print deployment operational snapshot (ARGS="--json --fail-on-error")
+	docker compose -f docker-compose.prod.yml exec -T app python manage.py ops_snapshot $(ARGS)
 
 smoke: ## Check a deployment is healthy and hardened (make smoke URL=https://chat.example.com)
 	@test -n "$(URL)" || { echo "usage: make smoke URL=https://chat.example.com [ARGS='--insecure']"; exit 2; }
