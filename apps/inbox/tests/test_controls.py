@@ -14,6 +14,13 @@ from django.utils import timezone
 from apps.contacts.models import Contact
 from apps.flows.models import ExecutionStatus, FlowExecution
 from apps.flows.services import create_flow, latest_version
+from apps.inbox import services as inbox_services
+from apps.inbox.models import (
+    ConversationAudit,
+    ConversationAuditEvent,
+    ConversationAuditSource,
+    WorkspaceMismatchError,
+)
 from apps.messaging.models import Conversation, ConversationState
 from apps.messaging.services import AGENT_AUTOMATION_PAUSE, pause_automation
 from apps.queueing.models import ActionStatus, ActionType, ScheduledAction
@@ -37,6 +44,21 @@ class TestAssignment:
         agent_client.post(url, {"assignee": ""})
         conversation.refresh_from_db()
         assert conversation.assignee_id is None
+
+        events = list(
+            ConversationAudit.objects.for_workspace(tenancy.workspace)
+            .filter(conversation=conversation)
+            .order_by("created_at")
+        )
+        assert [event.event for event in events] == [
+            ConversationAuditEvent.ASSIGNED,
+            ConversationAuditEvent.UNASSIGNED,
+        ]
+        assert all(event.actor_id == tenancy.user_for("agent").pk for event in events)
+        assert all(event.actor_label == tenancy.user_for("agent").display_name for event in events)
+        assert all(event.source == ConversationAuditSource.HUMAN for event in events)
+        assert events[0].metadata == {"assignee_id": str(editor.pk)}
+        assert events[1].metadata == {}
 
     def test_somebody_outside_the_workspace_cannot_be_assigned(
         self, agent_client: Any, url_for: Any, conversation: Conversation, other_tenancy: Any
@@ -81,6 +103,16 @@ class TestState:
         agent_client.post(url, {"state": "open"})
         conversation.refresh_from_db()
         assert conversation.state == ConversationState.OPEN
+
+        events = list(
+            ConversationAudit.objects.for_workspace(conversation.workspace_id)
+            .filter(conversation=conversation)
+            .order_by("created_at")
+        )
+        assert [event.event for event in events] == [
+            ConversationAuditEvent.STATE_DONE,
+            ConversationAuditEvent.STATE_OPENED,
+        ]
 
     def test_the_header_control_flips_after_the_state_changes(
         self, agent_client: Any, url_for: Any, conversation: Conversation
@@ -152,6 +184,12 @@ class TestThePause:
 
         conversation.refresh_from_db()
         assert conversation.automation_paused_until is None
+        event = ConversationAudit.objects.for_workspace(conversation.workspace_id).get(
+            conversation=conversation,
+            event=ConversationAuditEvent.AUTOMATION_RESUMED,
+        )
+        assert event.actor_id is not None
+        assert event.source == ConversationAuditSource.HUMAN
 
     def test_the_banner_shows_while_paused_and_not_afterwards(
         self, agent_client: Any, url_for: Any, conversation: Conversation
@@ -193,6 +231,28 @@ class TestThePause:
         assert response.status_code == 403
         conversation.refresh_from_db()
         assert conversation.automation_paused_until is None
+
+
+class TestConversationAudit:
+    def test_cross_workspace_actor_is_rejected(self, conversation: Conversation, other_tenancy: Any) -> None:
+        with pytest.raises(WorkspaceMismatchError):
+            inbox_services.assign_conversation(
+                conversation,
+                None,
+                actor=other_tenancy.owner,
+            )
+        assert not ConversationAudit.objects.for_workspace(conversation.workspace_id).exists()
+
+    def test_sidebar_shows_recent_ownership_activity(
+        self, tenancy: Any, agent_client: Any, url_for: Any, conversation: Conversation
+    ) -> None:
+        agent_client.post(url_for("pause", conversation_id=conversation.pk), {"action": "pause"})
+
+        body = agent_client.get(url_for("sidebar", conversation_id=conversation.pk)).content.decode()
+
+        assert "Activity" in body
+        assert "Automation paused" in body
+        assert tenancy.user_for("agent").display_name in body
 
 
 class TestStoppingAutomation:

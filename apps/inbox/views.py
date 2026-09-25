@@ -491,6 +491,7 @@ def _sidebar_context(request: WorkspaceRequest, conversation: Conversation) -> d
         "contact_tags": contact_tags,
         "available_tags": list(Tag.objects.for_workspace(request.workspace).exclude(pk__in=chosen)),
         "execution": selectors.live_execution_for(request.workspace, contact),
+        "audit_events": selectors.recent_audit_events(request.workspace, conversation),
         # The panel's pause toggle reads this. It used to arrive only because
         # the thread merged _thread_body_context over the top, so the standalone
         # sidebar endpoint — the one every refresh after a send or a pause goes
@@ -793,6 +794,8 @@ def _deliver(request: WorkspaceRequest, conversation_id: Any, *, internal: bool)
     except _ComposeError as exc:
         return toast_response(tone="error", title="Nothing to send", body=str(exc))
 
+    services.take_over(conversation, actor=request.user)
+
     message = messaging.send_as_agent(
         workspace=request.workspace,
         contact=conversation.contact,
@@ -879,6 +882,8 @@ def retry(request: WorkspaceRequest, workspace_id: str, conversation_id: str, me
         or original.source != MessageSource.AGENT
     ):
         raise Http404("Only an agent's own failed send can be retried.")
+
+    services.take_over(conversation, actor=request.user)
 
     message = messaging.send_as_agent(
         workspace=request.workspace,
@@ -1002,7 +1007,7 @@ def assign(request: WorkspaceRequest, workspace_id: str, conversation_id: str) -
     conversation = _conversation(request, conversation_id)
     raw = (request.POST.get("assignee") or "").strip()
     if not raw:
-        messaging.assign_conversation(conversation, None)
+        services.assign_conversation(conversation, None, actor=request.user)
         return toast_response(tone="success", title="Unassigned", events=_refresh())
 
     membership = _membership(request, raw)
@@ -1013,7 +1018,7 @@ def assign(request: WorkspaceRequest, workspace_id: str, conversation_id: str) -
         return toast_response(
             tone="error", title="Cannot assign", body="That person is not a member of this workspace."
         )
-    messaging.assign_conversation(conversation, membership.user)
+    services.assign_conversation(conversation, membership.user, actor=request.user)
     return toast_response(tone="success", title=f"Assigned to {membership.user.display_name}", events=_refresh())
 
 
@@ -1025,17 +1030,10 @@ def set_state(request: WorkspaceRequest, workspace_id: str, conversation_id: str
     conversation = _conversation(request, conversation_id)
     wanted = (request.POST.get("state") or "").strip()
     if wanted == ConversationState.DONE:
-        messaging.close_conversation(conversation)
+        services.set_conversation_state(conversation, ConversationState.DONE, actor=request.user)
         return toast_response(tone="success", title="Marked done", events=_refresh())
     if wanted == ConversationState.OPEN:
-        # open_conversation() is get-or-reopen, so for a thread that already
-        # exists this is precisely "reopen" — and it is the facade's function
-        # for it, which is the point.
-        messaging.open_conversation(
-            workspace=request.workspace,
-            contact=conversation.contact,
-            connection=conversation.channel_connection,
-        )
+        services.set_conversation_state(conversation, ConversationState.OPEN, actor=request.user)
         return toast_response(tone="success", title="Reopened", events=_refresh())
     return toast_response(tone="error", title="Unknown state", body="A conversation is either open or done.")
 
@@ -1052,9 +1050,9 @@ def pause(request: WorkspaceRequest, workspace_id: str, conversation_id: str) ->
     """
     conversation = _conversation(request, conversation_id)
     if (request.POST.get("action") or "").strip() == "resume":
-        messaging.pause_automation(conversation, None)
+        services.set_automation_pause(conversation, None, actor=request.user)
         return toast_response(tone="success", title="Automation resumed", events=_refresh())
-    messaging.pause_automation(conversation, timezone.now() + messaging.AGENT_AUTOMATION_PAUSE)
+    services.take_over(conversation, actor=request.user)
     return toast_response(tone="success", title="Automation paused", events=_refresh())
 
 

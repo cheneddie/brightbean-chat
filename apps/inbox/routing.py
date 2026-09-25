@@ -244,13 +244,14 @@ def _assign(conversation: Any, user_id: str) -> None:
     ``process_action`` and advisory locks are re-entrant per session, so this
     always acquires and costs nothing.
 
-    Through ``apps.messaging.services`` and nowhere else — ROADMAP contract 1,
-    and ``apps/messaging/tests/test_write_sites.py`` scans for the alternative.
+    Through the audited inbox ownership service, which delegates the actual
+    conversation mutation to ``apps.messaging.services`` and records a system
+    audit row. ROADMAP contract 1 still has one messaging write facade.
     """
     from django.db import transaction
 
+    from apps.inbox import services as inbox_services
     from apps.members.models import WorkspaceMembership
-    from apps.messaging import services as messaging
     from apps.queueing.locks import try_contact_lock
 
     # WorkspaceMembership is not workspace-scoped, so this is a plain filter on
@@ -275,7 +276,7 @@ def _assign(conversation: Any, user_id: str) -> None:
         fresh = _reload(conversation)
         if fresh is None or fresh.assignee_id is not None:
             return
-        messaging.assign_conversation(fresh, membership.user)
+        inbox_services.assign_conversation(fresh, membership.user)
 
 
 def _mark_done(conversation: Any) -> None:
@@ -295,13 +296,13 @@ def _mark_done(conversation: Any) -> None:
     "mark done" means *done unless something answers*, and a rule that wants the
     other behaviour wants a trigger that does not match.
     """
-    from apps.messaging import services as messaging
+    from apps.inbox import services as inbox_services
     from apps.messaging.models import ConversationState
 
     fresh = _reload(conversation)
     if fresh is None or fresh.state != ConversationState.OPEN:
         return
-    messaging.close_conversation(fresh)
+    inbox_services.set_conversation_state(fresh, ConversationState.DONE)
 
 
 def _reload(conversation: Any) -> Any:
