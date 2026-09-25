@@ -14,6 +14,7 @@ Django runs them before ``runserver`` and every management command.
 """
 
 from typing import Any
+from urllib.parse import urlparse
 
 from django.conf import settings
 from django.core.checks import CheckMessage, Error, Tags, Warning, register
@@ -66,6 +67,57 @@ def check_production_secrets(app_configs: Any = None, **kwargs: Any) -> list[Che
             )
         )
 
+    return errors
+
+
+def _deployment_instagram_app_configured() -> bool:
+    credentials = dict(getattr(settings, "PLATFORM_CREDENTIALS_FROM_ENV", {}).get("instagram", {}))
+    client_id = credentials.get("client_id") or credentials.get("app_id")
+    client_secret = credentials.get("client_secret") or credentials.get("app_secret")
+    return bool(client_id and client_secret)
+
+
+def _public_https_url(value: Any) -> bool:
+    if not isinstance(value, str) or not value.strip():
+        return False
+    parsed = urlparse(value.strip())
+    return parsed.scheme == "https" and bool(parsed.hostname) and parsed.username is None and parsed.password is None
+
+
+@register(Tags.security)
+def check_meta_review_legal_urls(app_configs: Any = None, **kwargs: Any) -> list[CheckMessage]:
+    """Require public HTTPS legal URLs before a deployment Meta app can go live."""
+    if settings.DEBUG or not _deployment_instagram_app_configured():
+        return []
+
+    requirements = (
+        (
+            "PRIVACY_POLICY_URL",
+            "common.E007",
+            "Meta App Review requires an accessible privacy policy for the Instagram integration.",
+        ),
+        (
+            "TERMS_OF_SERVICE_URL",
+            "common.E008",
+            "Publish the deployment terms and configure their public HTTPS URL.",
+        ),
+        (
+            "DATA_DELETION_INSTRUCTIONS_URL",
+            "common.E009",
+            "Meta platform users need an accessible way to request deletion outside the callback.",
+        ),
+    )
+    errors: list[CheckMessage] = []
+    for setting_name, check_id, hint in requirements:
+        value = getattr(settings, setting_name, "")
+        if not _public_https_url(value):
+            errors.append(
+                Error(
+                    f"{setting_name} must be a public HTTPS URL when the deployment Instagram app is configured.",
+                    hint=hint,
+                    id=check_id,
+                )
+            )
     return errors
 
 
