@@ -23,6 +23,7 @@ from typing import Any
 from django.core.management.base import BaseCommand
 from django.db import connections
 
+from apps.queueing.health import touch_queue_consumer
 from apps.queueing.housekeeping import ensure_housekeeping_scheduled
 from apps.queueing.worker import DEFAULT_BATCH_SIZE, BatchResult, positive_int, run_batch
 
@@ -50,6 +51,7 @@ class Command(BaseCommand):
 
         self._install_signal_handlers()
         ensure_housekeeping_scheduled()
+        touch_queue_consumer("worker", force=True)
 
         logger.info("Worker started batch_size=%s interval=%s", batch_size, interval)
         totals = BatchResult()
@@ -58,7 +60,9 @@ class Command(BaseCommand):
         while not self._stopping:
             self._refresh_connections()
 
+            touch_queue_consumer("worker")
             result = run_batch(batch_size)
+            touch_queue_consumer("worker")
             totals += result
             batches += 1
 
