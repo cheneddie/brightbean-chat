@@ -118,6 +118,7 @@ def internal_tick(request: HttpRequest) -> HttpResponse:
         }
     )
 
+
 @csrf_exempt
 def internal_queue_status(request: HttpRequest) -> HttpResponse:
     """Read-only deployment queue health for external monitoring.
