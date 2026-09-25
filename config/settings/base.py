@@ -132,7 +132,11 @@ for _index, _fallback in enumerate(ENCRYPTION_KEY_FALLBACKS):
 # the same paired keyring so existing unsubscribe/click/OAuth-state tokens can
 # survive a SECRET_KEY rotation while encrypted fields use the full pair.
 SECRET_KEY_FALLBACKS = list(
-    dict.fromkeys(str(item["secret_key"]) for item in ENCRYPTION_KEY_FALLBACKS if str(item["secret_key"]) != SECRET_KEY)
+    dict.fromkeys(
+        str(item["secret_key"])
+        for item in ENCRYPTION_KEY_FALLBACKS
+        if str(item["secret_key"]) != SECRET_KEY
+    )
 )
 
 # Application definition
