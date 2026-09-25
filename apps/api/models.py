@@ -171,8 +171,7 @@ class ApiKey(WorkspaceScopedModel):
         if not secret or not self.token_digest:
             return False
         matched = any(
-            secrets.compare_digest(candidate, self.token_digest)
-            for candidate in digest_candidates_for(secret)
+            secrets.compare_digest(candidate, self.token_digest) for candidate in digest_candidates_for(secret)
         )
         if not matched:
             return False
