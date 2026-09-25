@@ -206,12 +206,10 @@ def test_fair_claiming_remains_disjoint_across_concurrent_workers() -> None:
     quiet_due = timezone.now() - timedelta(minutes=1)
 
     ScheduledAction.objects.bulk_create(
-        ScheduledAction(workspace=noisy.workspace, run_at=noisy_due, type=PROBE, payload={"n": n})
-        for n in range(1_000)
+        ScheduledAction(workspace=noisy.workspace, run_at=noisy_due, type=PROBE, payload={"n": n}) for n in range(1_000)
     )
     ScheduledAction.objects.bulk_create(
-        ScheduledAction(workspace=quiet.workspace, run_at=quiet_due, type=PROBE, payload={"n": n})
-        for n in range(20)
+        ScheduledAction(workspace=quiet.workspace, run_at=quiet_due, type=PROBE, payload={"n": n}) for n in range(20)
     )
 
     barrier = threading.Barrier(2)
@@ -247,4 +245,3 @@ def test_fair_claiming_remains_disjoint_across_concurrent_workers() -> None:
     assert len({pk for pk, _workspace_id in claimed}) == 100
     assert sum(1 for _pk, workspace_id in claimed if workspace_id == quiet.workspace.pk) == 20
     assert sum(1 for _pk, workspace_id in claimed if workspace_id == noisy.workspace.pk) == 80
-
