@@ -168,3 +168,21 @@ class ScheduledAction(WorkspaceScopedModel):
     def is_system(self) -> bool:
         """True for deployment-level work that belongs to no tenant."""
         return self.workspace_id is None
+
+class QueueConsumerHeartbeat(models.Model):
+    """Deployment-level proof that some queue consumer is alive.
+
+    One singleton row is intentionally shared by the long-lived worker, CLI
+    tick and HTTP tick. Production cares that *some* supported consumer is
+    draining deferred work; the source field says which one touched it last.
+    """
+
+    key = models.CharField(primary_key=True, max_length=32, default="queue", editable=False)
+    source = models.CharField(max_length=32)
+    last_seen_at = models.DateTimeField()
+
+    class Meta:
+        db_table = "queueing_consumer_heartbeat"
+
+    def __str__(self) -> str:
+        return f"{self.key}: {self.source} @ {self.last_seen_at:%Y-%m-%d %H:%M:%S}"
