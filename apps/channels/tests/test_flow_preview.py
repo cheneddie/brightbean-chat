@@ -130,9 +130,7 @@ class TestTheMetaPlatformsRunTheDraft:
     def test_pre_rotation_preview_handle_claims_and_lazy_rehashes(
         self, tenancy: Tenancy, drafted_flow: Any, settings: Any
     ) -> None:
-        connection = connection_for(
-            tenancy, Platform.MESSENGER, display_name="@acme", external_id="rotation-page"
-        )
+        connection = connection_for(tenancy, Platform.MESSENGER, display_name="@acme", external_id="rotation-page")
         link, handle = preview.mint(flow=drafted_flow, connection=connection, user=tenancy.owner)
         old_digest = link.handle_digest
         old_secret = settings.SECRET_KEY
@@ -140,9 +138,7 @@ class TestTheMetaPlatformsRunTheDraft:
 
         settings.SECRET_KEY = "new-preview-secret-for-rotation-tests"
         settings.ENCRYPTION_KEY_SALT = b"new-preview-salt-for-rotation-tests"
-        settings.ENCRYPTION_KEY_FALLBACKS = [
-            {"secret_key": old_secret, "salt": old_salt.decode("utf-8")}
-        ]
+        settings.ENCRYPTION_KEY_FALLBACKS = [{"secret_key": old_secret, "salt": old_salt.decode("utf-8")}]
 
         claimed = preview._claim(connection, handle, "chat-rotation")
         assert claimed is not None
