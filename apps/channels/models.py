@@ -42,7 +42,7 @@ from django.conf import settings
 from django.db import models
 from django.utils import timezone
 
-from apps.common.encryption import EncryptedJSONField, EncryptedTextField, hmac_digest
+from apps.common.encryption import EncryptedJSONField, EncryptedTextField, hmac_digest, hmac_digest_candidates
 from apps.common.models import BaseModel
 from apps.common.platforms import Platform
 from apps.common.scoping import WorkspaceScopedModel
@@ -205,7 +205,7 @@ class ChannelConnection(WorkspaceScopedModel):
         return (
             # Cross-tenant by necessity: an inbound webhook identifies itself
             # with a secret, not a session.
-            cls.objects.unscoped().filter(webhook_secret_digest=hmac_digest(secret)).first()
+            cls.objects.unscoped().filter(webhook_secret_digest__in=hmac_digest_candidates(secret)).first()
         )
 
     def verify_webhook_secret(self, presented: str) -> bool:
@@ -217,7 +217,19 @@ class ChannelConnection(WorkspaceScopedModel):
         """
         if not presented or not self.webhook_secret_digest:
             return False
-        return secrets.compare_digest(hmac_digest(presented), self.webhook_secret_digest)
+        matched = any(
+            secrets.compare_digest(candidate, self.webhook_secret_digest)
+            for candidate in hmac_digest_candidates(presented)
+        )
+        if not matched:
+            return False
+        current = hmac_digest(presented)
+        if not secrets.compare_digest(current, self.webhook_secret_digest):
+            type(self).objects.unscoped().filter(pk=self.pk, webhook_secret_digest=self.webhook_secret_digest).update(
+                webhook_secret_digest=current
+            )
+            self.webhook_secret_digest = current
+        return True
 
 
 class WebhookEventLog(BaseModel):
