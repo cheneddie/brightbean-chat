@@ -142,6 +142,7 @@ class TestExactlyOnce:
         assert recovered is not None
         assert recovered.attempts == 2
 
+
 @pytest.mark.django_db(transaction=True)
 @override_settings(QUEUE_MAX_ACTIVE_PER_WORKSPACE=25)
 def test_concurrent_enqueue_cannot_overrun_workspace_admission_limit() -> None:
@@ -196,4 +197,3 @@ def test_concurrent_enqueue_cannot_overrun_workspace_admission_limit() -> None:
         .count()
         == 25
     )
-
