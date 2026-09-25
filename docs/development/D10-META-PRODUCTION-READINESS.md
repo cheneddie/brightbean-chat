@@ -1,6 +1,6 @@
 # D10 — Meta Production Readiness
 
-Status: **source implementation in progress; no executable validation in this pass**
+Status: **source implementation complete; executable validation pending**
 
 Tracking issue: `#22`
 
@@ -21,7 +21,9 @@ Branch `dev/D10-meta-production-readiness` adds:
 
 - `POST /meta/instagram/deauthorize/`;
 - `POST /meta/instagram/data-deletion/`;
-- `GET /meta/instagram/data-deletion/status/<confirmation_code>/`.
+- `GET /meta/instagram/data-deletion/status/<confirmation_code>/`;
+- `POST /meta/instagram/organization/<organization_id>/deauthorize/`;
+- `POST /meta/instagram/organization/<organization_id>/data-deletion/`.
 
 Security contract:
 
@@ -36,19 +38,30 @@ Security contract:
 - no plaintext signed request, Meta user id or confirmation code is stored in the receipt;
 - the receipt stores only confirmation HMAC, platform, deleted connection count and timestamps;
 - wrong signature cannot delete a connection;
-- missing deployment app configuration makes the callback 404.
+- missing deployment app configuration makes the generic callback 404;
+- organization callback URLs select exactly one organization's stored Meta App
+  secret before verifying the request — no env fallback and no try-all-secrets;
+- organization callbacks additionally scope deletion to that organization's
+  workspaces, so app-scoped lifecycle ids from different Meta Apps cannot cross
+  the tenant boundary.
 
 Deleting matched channel connections intentionally reuses existing FK cascades for
 channel-owned conversations, identities and trigger bindings. It does **not**
 hard-delete every CRM Contact in the workspace: those contacts are third parties
 who messaged the connected business, not the connected business account itself.
 
-### Known boundary
+### BYO Meta App boundary
 
-A deployment that stores different Meta App credentials per Organization cannot
-use one generic callback URL safely because signature verification needs the app
-secret before the callback identifies a workspace. That deployment mode needs a
-separate organization-scoped callback URL per Meta App and remains D10 work.
+A deployment that stores different Meta App credentials per Organization must
+register the organization-scoped lifecycle URLs above. The organization UUID is
+the pre-verification routing context that selects one app secret. The callback
+never guesses among secrets, and the verified lifecycle identity is never used
+outside that organization.
+
+The normal OAuth credential chain remains deployment environment → organization.
+The organization-scoped lifecycle URL intentionally does **not** use that chain:
+it must verify the BYO app that Meta invoked even when a deployment-level app is
+also configured.
 
 ## D10-B — App Review legal/readiness guard
 
@@ -74,11 +87,12 @@ availability.
 - complete a real-account E2E test with an Instagram professional account whose
   owner is not an app developer/tester;
 - test deauthorize + data deletion against Meta's actual callbacks;
-- add organization-scoped callback support before supporting bring-your-own Meta
-  Apps per organization.
+- verify organization-scoped callbacks with a real BYO Meta App before calling
+  that deployment mode production accepted.
 
 ## Validation boundary
 
-Per user instruction, GitHub Actions are not used for this development pass.
-Source-level tests are added, but no merge should occur until they are executed
-successfully in a suitable local/private-repo environment.
+Source-complete is not production-accepted. Automated tests and CI can validate
+the callback crypto, tenancy, migrations and configuration checks, but D10 must
+not merge until the real Meta App Dashboard and a real non-app-role professional
+account have completed the acceptance steps above.
