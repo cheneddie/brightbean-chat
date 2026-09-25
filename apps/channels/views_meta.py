@@ -3,7 +3,14 @@
 import logging
 
 from django.core.exceptions import RequestDataTooBig
-from django.http import Http404, HttpRequest, HttpResponse, HttpResponseNotAllowed, JsonResponse, QueryDict
+from django.http import (
+    Http404,
+    HttpRequest,
+    HttpResponse,
+    HttpResponseNotAllowed,
+    JsonResponse,
+    QueryDict,
+)
 from django.urls import reverse
 from django.views.decorators.csrf import csrf_exempt
 
