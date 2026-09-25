@@ -42,6 +42,9 @@ __all__ = [
     "DEFAULT_LABEL_COLOR",
     "MAX_LABELS_PER_CONVERSATION",
     "MAX_REMINDER_NOTE_CHARS",
+    "ConversationAudit",
+    "ConversationAuditEvent",
+    "ConversationAuditSource",
     "ConversationLabel",
     "ConversationLabelLink",
     "ConversationRead",
@@ -160,6 +163,58 @@ class ConversationScopedModel(WorkspaceScopedModel):
 
     def _derive_workspace(self) -> None:
         self.workspace_id = self.conversation.workspace_id
+
+
+class ConversationAuditEvent(models.TextChoices):
+    """Durable operator/system changes to one conversation."""
+
+    ASSIGNED = "assigned", "Assigned"
+    UNASSIGNED = "unassigned", "Unassigned"
+    AUTOMATION_PAUSED = "automation_paused", "Automation paused"
+    AUTOMATION_RESUMED = "automation_resumed", "Automation resumed"
+    STATE_OPENED = "state_opened", "Reopened"
+    STATE_DONE = "state_done", "Marked done"
+    HUMAN_HANDOFF = "human_handoff", "Human handoff"
+
+
+class ConversationAuditSource(models.TextChoices):
+    HUMAN = "human", "Human"
+    SYSTEM = "system", "System"
+
+
+class ConversationAudit(ConversationScopedModel):
+    """Durable operator ledger for ownership/state changes on a thread."""
+
+    conversation = models.ForeignKey(
+        "messaging.Conversation",
+        on_delete=models.CASCADE,
+        related_name="audit_events",
+    )
+    event = models.CharField(max_length=32, choices=ConversationAuditEvent.choices)
+    source = models.CharField(max_length=16, choices=ConversationAuditSource.choices)
+    actor = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="conversation_audit_events",
+    )
+    # Snapshot what the operator was called when the event happened. The FK is
+    # SET_NULL so an account can be deleted without deleting history; this keeps
+    # the audit useful after that deletion and through later display-name edits.
+    actor_label = models.CharField(max_length=160, blank=True, default="")
+    metadata = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        db_table = "inbox_conversation_audit"
+        ordering = ["-created_at", "-id"]
+        indexes = [
+            models.Index(fields=["workspace", "conversation", "-created_at"], name="convaudit_ws_conv_created_idx"),
+            models.Index(fields=["workspace", "event", "-created_at"], name="convaudit_ws_event_created_idx"),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.event} on {str(self.conversation_id)[:8]}"
 
 
 class ConversationRead(ConversationScopedModel):

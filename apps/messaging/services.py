@@ -99,6 +99,7 @@ __all__ = [
     "AGENT_AUTOMATION_PAUSE",
     "assign_conversation",
     "close_conversation",
+    "extend_automation_pause",
     "open_conversation",
     "pause_automation",
     "record_opt_in",
@@ -180,17 +181,29 @@ def pause_automation(conversation: Conversation, until: datetime | None) -> Conv
     return conversation
 
 
-def _extend_automation_pause(conversation: Conversation, by: timedelta) -> Conversation:
-    """Push the pause out by ``by``, never pulling it in.
+def extend_automation_pause(conversation: Conversation, by: timedelta) -> Conversation:
+    """Push the pause out by ``by`` without racing a longer concurrent pause.
 
-    An operator who paused automation for two hours has said something more
-    deliberate than an agent typing a reply; a reply that shortened it to thirty
-    minutes would quietly undo an explicit instruction.
+    The decision is made from a freshly locked conversation row. Agent replies,
+    explicit inbox takeover and Visual Builder handoff all share this primitive,
+    so a stale in-memory conversation can never shorten a pause another operator
+    just extended.
     """
-    now = timezone.now()
-    current = conversation.automation_paused_until
-    target = max(now + by, current) if current is not None else now + by
-    return pause_automation(conversation, target)
+    with transaction.atomic():
+        fresh = (
+            Conversation.objects.for_workspace(conversation.workspace_id)
+            .select_for_update()
+            .get(pk=conversation.pk)
+        )
+        now = timezone.now()
+        current = fresh.automation_paused_until
+        target = max(now + by, current) if current is not None else now + by
+        pause_automation(fresh, target)
+
+    # Keep callers that continue using the instance they passed in coherent.
+    conversation.automation_paused_until = fresh.automation_paused_until
+    conversation.updated_at = fresh.updated_at
+    return fresh
 
 
 # ---------------------------------------------------------------------------
@@ -474,7 +487,7 @@ def send_outbound(
     if source == MessageSource.AGENT:
         # Before compliance, deliberately: the pause records an agent *taking
         # over*, and a reply that compliance then refuses is still a takeover.
-        _extend_automation_pause(conversation, AGENT_AUTOMATION_PAUSE)
+        extend_automation_pause(conversation, AGENT_AUTOMATION_PAUSE)
 
     if internal:
         # A note never reaches a platform, so it skips compliance and the bucket

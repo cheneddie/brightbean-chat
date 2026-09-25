@@ -32,6 +32,9 @@ from django.utils import timezone
 from apps.inbox.models import (
     DEFAULT_LABEL_COLOR,
     MAX_LABELS_PER_CONVERSATION,
+    ConversationAudit,
+    ConversationAuditEvent,
+    ConversationAuditSource,
     ConversationLabel,
     ConversationLabelLink,
     ConversationRead,
@@ -39,14 +42,24 @@ from apps.inbox.models import (
     InboxReminder,
     InboxRule,
     ScheduledReply,
+    WorkspaceMismatchError,
 )
-from apps.messaging.models import Conversation
+from apps.members.models import WorkspaceMembership
+from apps.messaging import services as messaging
+from apps.messaging.models import Conversation, ConversationState
+from apps.queueing.locks import contact_lock
 
 __all__ = [
     "PRIORITY_STEP",
     "REMINDER",
     "SCHEDULED_REPLY",
     "InboxError",
+    "assign_conversation",
+    "audit_conversation",
+    "human_handoff",
+    "set_automation_pause",
+    "set_conversation_state",
+    "take_over",
     "apply_label",
     "cancel_reminder",
     "cancel_scheduled_reply",
@@ -76,6 +89,150 @@ PRIORITY_STEP = 10
 
 class InboxError(ValueError):
     """Something the inbox refuses to do, phrased for an operator."""
+
+
+def _require_workspace_member(conversation: Conversation, user: Any, *, role: str) -> None:
+    if user is None:
+        return
+    user_id = getattr(user, "pk", None)
+    if (
+        user_id is None
+        or not WorkspaceMembership.objects.filter(workspace_id=conversation.workspace_id, user_id=user_id).exists()
+    ):
+        raise WorkspaceMismatchError(f"That {role} is not a member of this conversation workspace.")
+
+
+def audit_conversation(
+    conversation: Conversation,
+    event: str,
+    *,
+    actor: Any = None,
+    metadata: dict[str, Any] | None = None,
+) -> ConversationAudit:
+    """Append one tenant-scoped conversation audit event."""
+    if event not in ConversationAuditEvent.values:
+        raise InboxError(f"Unknown conversation audit event {event!r}.")
+    _require_workspace_member(conversation, actor, role="actor")
+    actor_label = str(getattr(actor, "display_name", "") or "")[:160] if actor is not None else ""
+    return ConversationAudit.objects.create(
+        conversation=conversation,
+        event=event,
+        source=ConversationAuditSource.HUMAN if actor is not None else ConversationAuditSource.SYSTEM,
+        actor=actor,
+        actor_label=actor_label,
+        metadata=dict(metadata or {}),
+    )
+
+
+def assign_conversation(conversation: Conversation, assignee: Any, *, actor: Any = None) -> Conversation:
+    """Assign or unassign through messaging and record the ownership change."""
+    _require_workspace_member(conversation, actor, role="actor")
+    _require_workspace_member(conversation, assignee, role="assignee")
+    with transaction.atomic(), contact_lock(conversation.contact_id):
+        messaging.assign_conversation(conversation, assignee)
+        audit_conversation(
+            conversation,
+            ConversationAuditEvent.ASSIGNED if assignee is not None else ConversationAuditEvent.UNASSIGNED,
+            actor=actor,
+            metadata={"assignee_id": str(assignee.pk)} if assignee is not None else {},
+        )
+    return conversation
+
+
+def take_over(conversation: Conversation, *, actor: Any = None) -> Conversation:
+    """Extend human ownership without ever shortening a longer concurrent pause."""
+    _require_workspace_member(conversation, actor, role="actor")
+    with transaction.atomic(), contact_lock(conversation.contact_id):
+        fresh = messaging.extend_automation_pause(conversation, messaging.AGENT_AUTOMATION_PAUSE)
+        until = fresh.automation_paused_until
+        audit_conversation(
+            fresh,
+            ConversationAuditEvent.AUTOMATION_PAUSED,
+            actor=actor,
+            metadata={
+                "until": until.isoformat() if until is not None else "",
+                "reason": "agent_takeover",
+            },
+        )
+    return fresh
+
+
+def set_automation_pause(
+    conversation: Conversation,
+    until: datetime | None,
+    *,
+    actor: Any = None,
+) -> Conversation:
+    """Pause or resume through messaging and append the ownership audit."""
+    _require_workspace_member(conversation, actor, role="actor")
+    with transaction.atomic(), contact_lock(conversation.contact_id):
+        messaging.pause_automation(conversation, until)
+        metadata: dict[str, Any] = {"until": until.isoformat()} if until is not None else {}
+        if until is None:
+            # Dynamic import avoids an inbox <-> flows import cycle at app startup.
+            from apps.flows.handlers import release_takeover_deferred
+
+            metadata["released_actions"] = release_takeover_deferred(conversation.workspace_id, conversation.contact_id)
+        audit_conversation(
+            conversation,
+            (
+                ConversationAuditEvent.AUTOMATION_PAUSED
+                if until is not None
+                else ConversationAuditEvent.AUTOMATION_RESUMED
+            ),
+            actor=actor,
+            metadata=metadata,
+        )
+    return conversation
+
+
+def set_conversation_state(conversation: Conversation, state: str, *, actor: Any = None) -> Conversation:
+    """Open or close through messaging and record the operator change."""
+    _require_workspace_member(conversation, actor, role="actor")
+    with transaction.atomic():
+        if state == ConversationState.DONE:
+            messaging.close_conversation(conversation)
+            event = ConversationAuditEvent.STATE_DONE
+        elif state == ConversationState.OPEN:
+            conversation = messaging.open_conversation(
+                workspace=conversation.workspace,
+                contact=conversation.contact,
+                connection=conversation.channel_connection,
+            )
+            event = ConversationAuditEvent.STATE_OPENED
+        else:
+            raise InboxError("A conversation is either open or done.")
+        audit_conversation(conversation, event, actor=actor)
+    return conversation
+
+
+def human_handoff(
+    *,
+    workspace: Any,
+    contact: Any,
+    connection: Any,
+    assignee: Any = None,
+) -> Conversation:
+    """Open the inbox, optionally assign it, pause automation, and audit the handoff."""
+    with transaction.atomic(), contact_lock(contact):
+        conversation = messaging.open_conversation(workspace=workspace, contact=contact, connection=connection)
+        _require_workspace_member(conversation, assignee, role="assignee")
+        if assignee is not None:
+            messaging.assign_conversation(conversation, assignee)
+        conversation = messaging.extend_automation_pause(
+            conversation,
+            messaging.AGENT_AUTOMATION_PAUSE,
+        )
+        until = conversation.automation_paused_until
+        audit_conversation(
+            conversation,
+            ConversationAuditEvent.HUMAN_HANDOFF,
+            metadata={
+                "assignee_id": str(conversation.assignee_id) if conversation.assignee_id else "",
+                "paused_until": until.isoformat() if until is not None else "",
+            },
+        )
+    return conversation
 
 
 def mark_read(conversation: Conversation, user: Any, *, at: datetime) -> ConversationRead:

@@ -28,13 +28,15 @@ import logging
 from typing import Any
 from uuid import UUID
 
+from django.utils import timezone
+
 from apps.contacts.models import Contact
 from apps.flows.engine import FlowNotRunnableError, resume_execution, start_flow
 from apps.flows.models import Flow, FlowExecution, FlowVersion, StartedBy
-from apps.queueing.models import ActionType, ScheduledAction
-from apps.queueing.registry import register_handler
+from apps.queueing.models import ActionStatus, ActionType, ScheduledAction
+from apps.queueing.registry import register_handler, schedule
 
-__all__ = ["handle_followup_timer", "handle_resume_execution", "handle_start_flow"]
+__all__ = ["handle_followup_timer", "handle_resume_execution", "handle_start_flow", "release_takeover_deferred"]
 
 logger = logging.getLogger(__name__)
 
@@ -144,11 +146,81 @@ def _resume(payload: dict[str, Any], action: ScheduledAction, *, default_handle:
     if execution is None:
         logger.info("Resume action %s names an execution that is gone; dropping it.", action.pk)
         return
+    if _defer_for_takeover(execution, payload, action):
+        return
+
     token = payload.get("token")
     resume_execution(
         execution,
         handle=str(payload.get("handle") or default_handle),
         token=str(token) if token else None,
+    )
+
+
+def _defer_for_takeover(execution: FlowExecution, payload: dict[str, Any], action: ScheduledAction) -> bool:
+    """Move a due flow wake-up to the end of an active human takeover pause.
+
+    The current queue row is allowed to finish successfully. A deterministic
+    successor carries the same payload and action type, so a worker crash after
+    scheduling but before marking this row done cannot create duplicate wake-ups.
+    Retrying the current row would be wrong: queue backoff is unrelated to the
+    operator's pause deadline and could exhaust its retry budget while a person
+    is still handling the conversation.
+    """
+    if execution.channel_connection_id is None or not execution.is_live:
+        return False
+    token = payload.get("token")
+    if token is not None and execution.wait_config.get("token") != str(token):
+        return False
+
+    from apps.messaging.models import Conversation
+
+    conversation = (
+        Conversation.objects.for_workspace(execution.workspace_id)
+        .filter(
+            contact_id=execution.contact_id,
+            channel_connection_id=execution.channel_connection_id,
+        )
+        .only("automation_paused_until")
+        .first()
+    )
+    until = conversation.automation_paused_until if conversation is not None else None
+    if until is None or until <= timezone.now():
+        return False
+
+    key = f"takeover-defer:{action.pk}:{until.isoformat()}"
+    successor = schedule(
+        action.type,
+        until,
+        {**payload, "_takeover_deferred": True},
+        workspace=action.workspace,
+        contact=execution.contact_id,
+        idempotency_key=key,
+        max_attempts=action.max_attempts,
+    )
+    logger.info(
+        "Deferred flow action %s to %s because conversation automation is paused; successor=%s.",
+        action.pk,
+        until,
+        successor.pk,
+    )
+    return True
+
+
+def release_takeover_deferred(workspace: Any, contact: Any) -> int:
+    """Make takeover-deferred flow timers due immediately after an explicit resume."""
+    now = timezone.now()
+    contact_id = getattr(contact, "pk", contact)
+    return (
+        ScheduledAction.objects.for_workspace(workspace)
+        .filter(
+            contact_id=contact_id,
+            status=ActionStatus.PENDING,
+            type__in=[ActionType.RESUME_EXECUTION, ActionType.FOLLOWUP_TIMER],
+            payload___takeover_deferred=True,
+            run_at__gt=now,
+        )
+        .update(run_at=now, updated_at=now)
     )
 
 
