@@ -4,6 +4,7 @@ import pytest
 
 from apps.common.checks import (
     MIN_WEBHOOK_LOG_RETENTION_DAYS,
+    check_meta_review_legal_urls,
     check_production_secrets,
     check_s3_custom_domain_signing,
     check_webhook_log_retention,
@@ -54,6 +55,50 @@ class TestProductionSecrets:
 
         assert check_production_secrets() == []
 
+
+@pytest.mark.django_db
+class TestMetaReviewLegalUrls:
+    def _configure_app(self, settings):
+        settings.PLATFORM_CREDENTIALS_FROM_ENV = {
+            "instagram": {"client_id": "123", "client_secret": "secret"}
+        }
+
+    def test_debug_does_not_require_public_legal_urls(self, settings):
+        settings.DEBUG = True
+        self._configure_app(settings)
+        assert check_meta_review_legal_urls() == []
+
+    def test_no_deployment_instagram_app_does_not_require_meta_legal_urls(self, settings):
+        settings.DEBUG = False
+        settings.PLATFORM_CREDENTIALS_FROM_ENV = {}
+        assert check_meta_review_legal_urls() == []
+
+    def test_configured_production_app_requires_all_three_urls(self, settings):
+        settings.DEBUG = False
+        self._configure_app(settings)
+        settings.PRIVACY_POLICY_URL = ""
+        settings.TERMS_OF_SERVICE_URL = ""
+        settings.DATA_DELETION_INSTRUCTIONS_URL = ""
+
+        assert _ids(check_meta_review_legal_urls()) == {"common.E007", "common.E008", "common.E009"}
+
+    def test_http_urls_do_not_pass_the_production_check(self, settings):
+        settings.DEBUG = False
+        self._configure_app(settings)
+        settings.PRIVACY_POLICY_URL = "http://example.com/privacy"
+        settings.TERMS_OF_SERVICE_URL = "http://example.com/terms"
+        settings.DATA_DELETION_INSTRUCTIONS_URL = "http://example.com/delete"
+
+        assert _ids(check_meta_review_legal_urls()) == {"common.E007", "common.E008", "common.E009"}
+
+    def test_public_https_urls_pass(self, settings):
+        settings.DEBUG = False
+        self._configure_app(settings)
+        settings.PRIVACY_POLICY_URL = "https://example.com/privacy"
+        settings.TERMS_OF_SERVICE_URL = "https://example.com/terms"
+        settings.DATA_DELETION_INSTRUCTIONS_URL = "https://example.com/data-deletion"
+
+        assert check_meta_review_legal_urls() == []
 
 @pytest.mark.django_db
 class TestS3CustomDomainSigning:
