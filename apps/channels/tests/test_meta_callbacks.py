@@ -17,7 +17,12 @@ from apps.channels.models import ChannelConnection, MetaDataDeletionReceipt
 from apps.channels.tests.instagram_support import APP_SECRET, IG_ACCOUNT_ID
 
 
-def _signed_request(*, user_id: str = IG_ACCOUNT_ID, secret: str = APP_SECRET, algorithm: str = "HMAC-SHA256") -> str:
+def _signed_request(
+    *,
+    user_id: str = IG_ACCOUNT_ID,
+    secret: str = APP_SECRET,
+    algorithm: str = "HMAC-SHA256",
+) -> str:
     payload = json.dumps(
         {"algorithm": algorithm, "issued_at": 1_700_000_000, "user_id": user_id},
         separators=(",", ":"),
@@ -63,18 +68,15 @@ class TestDataDeletionCallback:
         body = response.json()
         code = body["confirmation_code"]
         assert code
-        assert body["url"].endswith(
-            reverse("instagram_data_deletion_status", kwargs={"confirmation_code": code})
-        )
+        status_url = reverse("instagram_data_deletion_status", kwargs={"confirmation_code": code})
+        assert body["url"].endswith(status_url)
         assert not ChannelConnection.objects.unscoped().filter(pk=instagram_connection.pk).exists()
 
         receipt = MetaDataDeletionReceipt.objects.get()
         assert receipt.deleted_connections == 1
         assert receipt.confirmation_digest != code
 
-        status = client.get(
-            reverse("instagram_data_deletion_status", kwargs={"confirmation_code": code})
-        )
+        status = client.get(status_url)
         assert status.status_code == 200
         assert status.json()["status"] == "completed"
         assert status.json()["confirmation_code"] == code
@@ -111,9 +113,8 @@ class TestDataDeletionCallback:
         assert ChannelConnection.objects.unscoped().filter(pk=instagram_connection.pk).exists()
 
     def test_unknown_status_capability_is_404(self, client: Client) -> None:
-        response = client.get(
-            reverse("instagram_data_deletion_status", kwargs={"confirmation_code": "unknown"})
-        )
+        status_url = reverse("instagram_data_deletion_status", kwargs={"confirmation_code": "unknown"})
+        response = client.get(status_url)
         assert response.status_code == 404
 
     def test_receipt_does_not_store_plaintext_user_id_or_confirmation_code(
