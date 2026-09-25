@@ -6,7 +6,7 @@ import pytest
 from cryptography.exceptions import InvalidTag
 from django.db import connection
 
-from apps.common.encryption import decrypt_value, encrypt_value
+from apps.common.encryption import decrypt_value, encrypt_value, hmac_digest, hmac_digest_candidates
 from tests.testapp.models import EncryptionProbe
 
 
@@ -53,6 +53,50 @@ class TestValueHelpers:
         with pytest.raises(InvalidTag):
             decrypt_value(ciphertext)
 
+    def test_previous_key_pair_can_decrypt_after_primary_rotation(self, settings, secret_value):
+        old_secret = settings.SECRET_KEY
+        old_salt = settings.ENCRYPTION_KEY_SALT
+        ciphertext = encrypt_value(secret_value)
+
+        settings.SECRET_KEY = "new-primary-secret-for-rotation-tests"
+        settings.ENCRYPTION_KEY_SALT = b"new-primary-salt-for-rotation-tests"
+        settings.ENCRYPTION_KEY_FALLBACKS = [
+            {"secret_key": old_secret, "salt": old_salt.decode("utf-8")}
+        ]
+
+        assert decrypt_value(ciphertext) == secret_value
+
+    def test_new_writes_use_only_the_new_primary_key(self, settings, secret_value):
+        old_secret = settings.SECRET_KEY
+        old_salt = settings.ENCRYPTION_KEY_SALT
+        settings.SECRET_KEY = "new-primary-secret-for-rotation-tests"
+        settings.ENCRYPTION_KEY_SALT = b"new-primary-salt-for-rotation-tests"
+        settings.ENCRYPTION_KEY_FALLBACKS = [
+            {"secret_key": old_secret, "salt": old_salt.decode("utf-8")}
+        ]
+        ciphertext = encrypt_value(secret_value)
+
+        settings.SECRET_KEY = old_secret
+        settings.ENCRYPTION_KEY_SALT = old_salt
+        settings.ENCRYPTION_KEY_FALLBACKS = []
+        with pytest.raises(InvalidTag):
+            decrypt_value(ciphertext)
+
+    def test_hmac_candidates_include_current_then_previous_generation(self, settings):
+        value = "opaque-token-value"
+        old_digest = hmac_digest(value)
+        old_secret = settings.SECRET_KEY
+        old_salt = settings.ENCRYPTION_KEY_SALT
+
+        settings.SECRET_KEY = "new-primary-secret-for-rotation-tests"
+        settings.ENCRYPTION_KEY_SALT = b"new-primary-salt-for-rotation-tests"
+        settings.ENCRYPTION_KEY_FALLBACKS = [
+            {"secret_key": old_secret, "salt": old_salt.decode("utf-8")}
+        ]
+
+        candidates = hmac_digest_candidates(value)
+        assert candidates[0] == hmac_digest(value)
+        assert old_digest in candidates[1:]
 
 @pytest.mark.django_db
 class TestEncryptedFields:
