@@ -372,6 +372,7 @@ TICK_TOKEN = env("TICK_TOKEN", default="")
 # Operational queue status marks an overdue due-row as degraded after this age.
 # A stale running row is always an error; this threshold only covers backlog.
 QUEUE_STATUS_OVERDUE_WARN_SECONDS = env.int("QUEUE_STATUS_OVERDUE_WARN_SECONDS", default=60)
+QUEUE_ZOMBIE_AFTER_SECONDS = env.int("QUEUE_ZOMBIE_AFTER_SECONDS", default=10 * 60)
 QUEUE_CONSUMER_HEARTBEAT_MAX_AGE_SECONDS = env.int("QUEUE_CONSUMER_HEARTBEAT_MAX_AGE_SECONDS", default=120)
 # Deployment-wide incident thresholds used by manage.py ops_snapshot.
 OPS_WEBHOOK_FAILURE_WINDOW_SECONDS = env.int("OPS_WEBHOOK_FAILURE_WINDOW_SECONDS", default=15 * 60)
