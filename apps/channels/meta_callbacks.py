@@ -19,7 +19,7 @@ from typing import Any
 from django.db import IntegrityError, transaction
 
 from apps.channels.models import ChannelConnection, MetaDataDeletionReceipt
-from apps.common.encryption import hmac_digest
+from apps.common.encryption import hmac_digest, hmac_digest_candidates
 from apps.common.platforms import Platform
 from apps.credentials.models import PlatformCredential, derive_is_configured
 from apps.credentials.resolution import SOURCE_ENV, resolve_platform_credentials
@@ -150,10 +150,26 @@ def create_deletion_receipt(*, deleted_connections: int) -> tuple[str, MetaDataD
 
 
 def receipt_for_code(code: str) -> MetaDataDeletionReceipt | None:
-    """Resolve a public status capability without storing the plaintext code."""
+    """Resolve a public status capability across planned key rotation.
+
+    The receipt stores only an HMAC, so it cannot be rewritten offline after a
+    SECRET_KEY rotation. During the paired-fallback window, try the current and
+    previous digest generations; a successful old-generation lookup is then
+    lazy-rehashed to the primary so the fallback can later be removed.
+    """
     if not code or len(code) > 200:
         return None
-    return MetaDataDeletionReceipt.objects.filter(confirmation_digest=hmac_digest(code)).first()
+    current = hmac_digest(code)
+    receipt = MetaDataDeletionReceipt.objects.filter(
+        confirmation_digest__in=hmac_digest_candidates(code)
+    ).first()
+    if receipt is not None and receipt.confirmation_digest != current:
+        MetaDataDeletionReceipt.objects.filter(
+            pk=receipt.pk,
+            confirmation_digest=receipt.confirmation_digest,
+        ).update(confirmation_digest=current)
+        receipt.confirmation_digest = current
+    return receipt
 
 
 def _b64url_decode(value: str) -> bytes:
