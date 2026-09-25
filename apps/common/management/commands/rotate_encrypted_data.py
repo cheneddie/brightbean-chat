@@ -78,7 +78,8 @@ class Command(BaseCommand):
             active_keys = api_key_model._base_manager.filter(revoked_at__isnull=True).count()
             lines.append(
                 f"API keys still potentially depend on fallback digests: {active_keys}. "
-                "They lazy-rehash on successful authentication; rotate/revoke any never-used keys before removing fallbacks."
+                "They lazy-rehash on successful authentication; rotate/revoke any never-used keys "
+                "before removing fallbacks."
             )
 
         invitation_model = apps.get_model("members", "Invitation")
