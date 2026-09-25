@@ -4,6 +4,7 @@ import base64
 import hashlib
 import hmac
 import json
+from typing import Any
 from urllib.parse import urlencode
 
 import pytest
@@ -27,7 +28,7 @@ def _signed_request(*, user_id: str = IG_ACCOUNT_ID, secret: str = APP_SECRET, a
     return f"{encoded_signature}.{encoded_payload}"
 
 
-def _post(client: Client, url: str, signed: str):
+def _post(client: Client, url: str, signed: str) -> Any:
     body = urlencode({"signed_request": signed})
     return client.post(url, data=body, content_type="application/x-www-form-urlencoded")
 
@@ -101,7 +102,7 @@ class TestDataDeletionCallback:
         assert not MetaDataDeletionReceipt.objects.exists()
 
     def test_route_is_hidden_without_deployment_app_credentials(
-        self, client: Client, settings, instagram_connection: ChannelConnection
+        self, client: Client, settings: Any, instagram_connection: ChannelConnection
     ) -> None:
         settings.PLATFORM_CREDENTIALS_FROM_ENV = {}
         response = _post(client, reverse("instagram_data_deletion"), _signed_request())
