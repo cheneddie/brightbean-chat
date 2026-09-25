@@ -248,7 +248,9 @@ class TestQueueStatus:
         settings.QUEUE_STATUS_OVERDUE_WARN_SECONDS = 60
         touch_queue_consumer("worker", force=True)
         action = make_action(tenancy.workspace)
-        ScheduledAction.objects.filter(pk=action.pk).update(run_at=timezone.now() - timedelta(minutes=2))
+        ScheduledAction.objects.for_workspace(tenancy.workspace).filter(pk=action.pk).update(
+            run_at=timezone.now() - timedelta(minutes=2)
+        )
 
         response = client.get(f"{status_url}?token={TOKEN}")
 
@@ -264,7 +266,7 @@ class TestQueueStatus:
         settings.TICK_TOKEN = TOKEN
         touch_queue_consumer("worker", force=True)
         action = make_action(tenancy.workspace)
-        ScheduledAction.objects.filter(pk=action.pk).update(
+        ScheduledAction.objects.for_workspace(tenancy.workspace).filter(pk=action.pk).update(
             status=ActionStatus.RUNNING,
             updated_at=timezone.now() - timedelta(minutes=11),
         )
