@@ -47,9 +47,7 @@ class TestOpsSnapshot:
         assert snapshot.status == "error"
         assert snapshot.consumer_stale is True
 
-    def test_recent_webhook_failures_crossing_threshold_are_degraded(
-        self, tenancy: Tenancy, settings: Any
-    ) -> None:
+    def test_recent_webhook_failures_crossing_threshold_are_degraded(self, tenancy: Tenancy, settings: Any) -> None:
         _heartbeat()
         settings.OPS_WEBHOOK_FAILURE_WARN_COUNT = 1
         connection = _connection(tenancy)
@@ -74,9 +72,7 @@ class TestOpsSnapshot:
             provider_event_id="stuck-1",
             status=WebhookEventStatus.RECEIVED,
         )
-        WebhookEventLog.objects.filter(pk=event.pk).update(
-            received_at=timezone.now() - timedelta(minutes=2)
-        )
+        WebhookEventLog.objects.filter(pk=event.pk).update(received_at=timezone.now() - timedelta(minutes=2))
 
         snapshot = collect_snapshot()
         assert snapshot.status == "error"
