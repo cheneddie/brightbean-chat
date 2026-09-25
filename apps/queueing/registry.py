@@ -72,6 +72,14 @@ Handler = Callable[[dict[str, Any], ScheduledAction], None]
 
 _HANDLERS: dict[str, Handler] = {}
 
+# Low-volume control-plane work that must remain deliverable when a tenant's
+# data-plane backlog is full. Keep this list deliberately tiny: an entry here
+# bypasses the active-backlog admission cap, though the row remains workspace-
+# scoped and goes through the same idempotency/write path. Notification email is
+# the operator warning path for failures such as loop caps; letting a saturated
+# tenant queue suppress its own warning would turn backpressure into blindness.
+_ADMISSION_RESERVED_TYPES = frozenset({"notification_email"})
+
 
 class DuplicateHandlerError(RuntimeError):
     """Two handlers registered for one action type."""
@@ -341,7 +349,7 @@ def _schedule(
         "idempotency_key": idempotency_key,
     }
 
-    if workspace is None:
+    if workspace is None or action_type in _ADMISSION_RESERVED_TYPES:
         return _create_action(fields, idempotency_key=idempotency_key, workspace=workspace)
 
     workspace_id = getattr(workspace, "pk", workspace)
