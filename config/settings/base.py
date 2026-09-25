@@ -124,19 +124,13 @@ for _index, _fallback in enumerate(ENCRYPTION_KEY_FALLBACKS):
     if not isinstance(_fallback, dict):
         raise ImproperlyConfigured(f"ENCRYPTION_KEY_FALLBACKS[{_index}] must be an object.")
     if not str(_fallback.get("secret_key", "")).strip() or not str(_fallback.get("salt", "")).strip():
-        raise ImproperlyConfigured(
-            f"ENCRYPTION_KEY_FALLBACKS[{_index}] needs non-empty secret_key and salt values."
-        )
+        raise ImproperlyConfigured(f"ENCRYPTION_KEY_FALLBACKS[{_index}] needs non-empty secret_key and salt values.")
 
 # Django's signer already supports key fallbacks. Feed it the secret half of
 # the same paired keyring so existing unsubscribe/click/OAuth-state tokens can
 # survive a SECRET_KEY rotation while encrypted fields use the full pair.
 SECRET_KEY_FALLBACKS = list(
-    dict.fromkeys(
-        str(item["secret_key"])
-        for item in ENCRYPTION_KEY_FALLBACKS
-        if str(item["secret_key"]) != SECRET_KEY
-    )
+    dict.fromkeys(str(item["secret_key"]) for item in ENCRYPTION_KEY_FALLBACKS if str(item["secret_key"]) != SECRET_KEY)
 )
 
 # Application definition
