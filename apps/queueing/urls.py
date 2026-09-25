@@ -14,4 +14,5 @@ urlpatterns = [
     # No trailing slash: SPEC §15 writes /internal/tick, external pingers hit
     # literal URLs, and /healthz sets the same precedent.
     path("internal/tick", views.internal_tick, name="internal_tick"),
+    path("internal/queue-status", views.internal_queue_status, name="internal_queue_status"),
 ]

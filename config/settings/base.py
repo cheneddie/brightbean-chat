@@ -116,6 +116,30 @@ else:
 # Encryption key derivation salt — consumed by apps.common.encryption.
 ENCRYPTION_KEY_SALT = _ENCRYPTION_KEY_SALT.encode("utf-8")
 
+# Previous (SECRET_KEY, ENCRYPTION_KEY_SALT) pairs kept temporarily during a
+# credential-encryption rotation. JSON shape:
+# [{"secret_key":"old-secret","salt":"old-salt"}]
+#
+# The pairing matters: a salt from generation N with a secret from generation
+# N-1 derives a third key that never encrypted anything. apps.common.encryption
+# tries these only for reads / lookup verification; every new write uses the
+# primary pair above.
+ENCRYPTION_KEY_FALLBACKS = env.json("ENCRYPTION_KEY_FALLBACKS", default=[])
+if not isinstance(ENCRYPTION_KEY_FALLBACKS, list):
+    raise ImproperlyConfigured("ENCRYPTION_KEY_FALLBACKS must be a JSON list.")
+for _index, _fallback in enumerate(ENCRYPTION_KEY_FALLBACKS):
+    if not isinstance(_fallback, dict):
+        raise ImproperlyConfigured(f"ENCRYPTION_KEY_FALLBACKS[{_index}] must be an object.")
+    if not str(_fallback.get("secret_key", "")).strip() or not str(_fallback.get("salt", "")).strip():
+        raise ImproperlyConfigured(f"ENCRYPTION_KEY_FALLBACKS[{_index}] needs non-empty secret_key and salt values.")
+
+# Django's signer already supports key fallbacks. Feed it the secret half of
+# the same paired keyring so existing unsubscribe/click/OAuth-state tokens can
+# survive a SECRET_KEY rotation while encrypted fields use the full pair.
+SECRET_KEY_FALLBACKS = list(
+    dict.fromkeys(str(item["secret_key"]) for item in ENCRYPTION_KEY_FALLBACKS if str(item["secret_key"]) != SECRET_KEY)
+)
+
 # Application definition
 
 DJANGO_APPS = [
@@ -346,6 +370,19 @@ SOCIALACCOUNT_ADAPTER = "apps.accounts.adapters.SocialAccountAdapter"
 # argued in apps/queueing/views.py: the caller is a third-party pinger holding
 # one static URL forever, so there is no expiry to sign in.
 TICK_TOKEN = env("TICK_TOKEN", default="")
+# Operational queue status marks an overdue due-row as degraded after this age.
+# A stale running row is always an error; this threshold only covers backlog.
+QUEUE_STATUS_OVERDUE_WARN_SECONDS = env.int("QUEUE_STATUS_OVERDUE_WARN_SECONDS", default=60)
+QUEUE_ZOMBIE_AFTER_SECONDS = env.int("QUEUE_ZOMBIE_AFTER_SECONDS", default=10 * 60)
+QUEUE_CONSUMER_HEARTBEAT_MAX_AGE_SECONDS = env.int("QUEUE_CONSUMER_HEARTBEAT_MAX_AGE_SECONDS", default=120)
+# Per-workspace active queue admission cap. pending + running rows count;
+# terminal history does not. <= 0 disables the cap for deliberate self-hosted
+# deployments that accept an unbounded tenant backlog.
+QUEUE_MAX_ACTIVE_PER_WORKSPACE = env.int("QUEUE_MAX_ACTIVE_PER_WORKSPACE", default=10_000)
+# Deployment-wide incident thresholds used by manage.py ops_snapshot.
+OPS_WEBHOOK_FAILURE_WINDOW_SECONDS = env.int("OPS_WEBHOOK_FAILURE_WINDOW_SECONDS", default=15 * 60)
+OPS_WEBHOOK_FAILURE_WARN_COUNT = env.int("OPS_WEBHOOK_FAILURE_WARN_COUNT", default=5)
+OPS_WEBHOOK_STUCK_SECONDS = env.int("OPS_WEBHOOK_STUCK_SECONDS", default=5 * 60)
 
 # ---------------------------------------------------------------------------
 # Outbound send rate (SPEC §8, §20) — apps.messaging.buckets

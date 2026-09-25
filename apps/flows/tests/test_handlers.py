@@ -7,6 +7,7 @@ assuming all three. A test that called the function bare would pass with the
 registration broken and the lock absent.
 """
 
+from datetime import timedelta
 from typing import Any
 
 import pytest
@@ -15,6 +16,8 @@ from django.utils import timezone
 from apps.flows.engine.results import Wait
 from apps.flows.models import ExecutionStatus, FlowExecution, StartedBy
 from apps.flows.tests.support import contact_for, edge, graph, node, node_runtime, published_flow
+from apps.inbox import services as inbox_services
+from apps.messaging import services as messaging
 from apps.queueing.models import ActionStatus, ActionType, ScheduledAction
 from apps.queueing.registry import get_handler, schedule
 from apps.queueing.worker import process_action
@@ -189,13 +192,13 @@ class TestStartFlowAction:
 
 @pytest.mark.django_db
 class TestResumeActions:
-    def _parked(self, tenancy):
+    def _parked(self, tenancy, *, connection=None):
         from apps.flows.engine import start_flow
 
         flow = _waiting_flow(tenancy.workspace)
         contact = contact_for(tenancy.workspace)
         with node_runtime("data_collection", lambda ctx: Wait(WAIT_CONFIG)):
-            execution = start_flow(contact, flow, started_by=StartedBy.API)
+            execution = start_flow(contact, flow, started_by=StartedBy.API, connection=connection)
         return contact, execution
 
     def test_resume_execution_follows_the_default_handle(self, tenancy):
@@ -226,6 +229,121 @@ class TestResumeActions:
         assert _run(action).status == ActionStatus.DONE
         execution.refresh_from_db()
         assert execution.current_node_id == "b"
+
+    @pytest.mark.parametrize("action_type", [ActionType.RESUME_EXECUTION, ActionType.FOLLOWUP_TIMER])
+    def test_due_resume_is_deferred_until_human_takeover_pause_ends(self, tenancy, connection, action_type):
+        contact, execution = self._parked(tenancy, connection=connection)
+        conversation = messaging.open_conversation(workspace=tenancy.workspace, contact=contact, connection=connection)
+        until = timezone.now() + timedelta(hours=1)
+        messaging.pause_automation(conversation, until)
+
+        payload = {"execution_id": str(execution.pk), "token": "t1"}
+        if action_type == ActionType.RESUME_EXECUTION:
+            payload["handle"] = "default"
+        action = schedule(
+            action_type,
+            timezone.now(),
+            payload,
+            workspace=tenancy.workspace,
+            contact=contact,
+        )
+
+        assert _run(action).status == ActionStatus.DONE
+        execution.refresh_from_db()
+        assert execution.status == ExecutionStatus.WAITING_REPLY
+        assert {tag.name for tag in contact.tags.all()} == set()
+
+        successor = (
+            ScheduledAction.objects.for_workspace(tenancy.workspace)
+            .exclude(pk=action.pk)
+            .get(type=action_type, status=ActionStatus.PENDING)
+        )
+        assert successor.payload == {**payload, "_takeover_deferred": True}
+        assert successor.run_at == until
+        assert successor.attempts == 0
+        assert successor.max_attempts == action.max_attempts
+
+    def test_extending_takeover_pause_defers_the_successor_again(self, tenancy, connection):
+        contact, execution = self._parked(tenancy, connection=connection)
+        conversation = messaging.open_conversation(workspace=tenancy.workspace, contact=contact, connection=connection)
+        first_until = timezone.now() + timedelta(minutes=30)
+        messaging.pause_automation(conversation, first_until)
+        payload = {"execution_id": str(execution.pk), "handle": "default", "token": "t1"}
+        first = schedule(
+            ActionType.RESUME_EXECUTION,
+            timezone.now(),
+            payload,
+            workspace=tenancy.workspace,
+            contact=contact,
+        )
+        assert _run(first).status == ActionStatus.DONE
+        deferred = (
+            ScheduledAction.objects.for_workspace(tenancy.workspace)
+            .exclude(pk=first.pk)
+            .get(status=ActionStatus.PENDING)
+        )
+
+        second_until = timezone.now() + timedelta(hours=2)
+        messaging.pause_automation(conversation, second_until)
+        assert _run(deferred).status == ActionStatus.DONE
+
+        pending = ScheduledAction.objects.for_workspace(tenancy.workspace).filter(status=ActionStatus.PENDING)
+        assert pending.count() == 1
+        second = pending.get()
+        assert second.run_at == second_until
+        assert second.payload == {**payload, "_takeover_deferred": True}
+        execution.refresh_from_db()
+        assert execution.status == ExecutionStatus.WAITING_REPLY
+
+    def test_explicit_resume_releases_a_takeover_deferred_timer_immediately(self, tenancy, connection):
+        contact, execution = self._parked(tenancy, connection=connection)
+        conversation = messaging.open_conversation(workspace=tenancy.workspace, contact=contact, connection=connection)
+        messaging.pause_automation(conversation, timezone.now() + timedelta(hours=1))
+        payload = {"execution_id": str(execution.pk), "handle": "default", "token": "t1"}
+        action = schedule(
+            ActionType.RESUME_EXECUTION,
+            timezone.now(),
+            payload,
+            workspace=tenancy.workspace,
+            contact=contact,
+        )
+        assert _run(action).status == ActionStatus.DONE
+        deferred = (
+            ScheduledAction.objects.for_workspace(tenancy.workspace)
+            .exclude(pk=action.pk)
+            .get(status=ActionStatus.PENDING)
+        )
+        assert deferred.run_at > timezone.now()
+
+        inbox_services.set_automation_pause(
+            conversation,
+            None,
+            actor=tenancy.user_for("agent"),
+        )
+        deferred.refresh_from_db()
+        assert deferred.run_at <= timezone.now()
+
+        assert _run(deferred).status == ActionStatus.DONE
+        execution.refresh_from_db()
+        assert execution.status == ExecutionStatus.COMPLETED
+        assert {tag.name for tag in contact.tags.all()} == {"resumed"}
+
+    def test_stale_timer_is_not_deferred_just_because_takeover_is_active(self, tenancy, connection):
+        contact, execution = self._parked(tenancy, connection=connection)
+        conversation = messaging.open_conversation(workspace=tenancy.workspace, contact=contact, connection=connection)
+        messaging.pause_automation(conversation, timezone.now() + timedelta(hours=1))
+        action = schedule(
+            ActionType.FOLLOWUP_TIMER,
+            timezone.now(),
+            {"execution_id": str(execution.pk), "token": "stale"},
+            workspace=tenancy.workspace,
+            contact=contact,
+        )
+
+        assert _run(action).status == ActionStatus.DONE
+        assert ScheduledAction.objects.for_workspace(tenancy.workspace).filter(status=ActionStatus.PENDING).count() == 0
+        execution.refresh_from_db()
+        assert execution.status == ExecutionStatus.WAITING_REPLY
 
     def test_a_stale_token_is_a_no_op_rather_than_a_failure(self, tenancy):
         """A timer racing a reply must lose quietly, not retry five times."""

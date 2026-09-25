@@ -199,6 +199,48 @@ class TestBatchesAcrossAccounts:
 
 
 @pytest.mark.usefixtures("instagram_app")
+class TestBurstAcceptance:
+    @pytest.mark.parametrize("event_count", [100, 500, 1000])
+    def test_signed_bursts_have_no_loss_or_duplicates(
+        self,
+        client: Client,
+        instagram_connection: ChannelConnection,
+        collected: list[Any],
+        event_count: int,
+    ) -> None:
+        """D9-D: production-shaped Meta bursts survive the full webhook path.
+
+        Keep each provider delivery below the normal 256 KiB request ceiling
+        rather than weakening the security limit for a load test. Meta may
+        batch many messaging items in one delivery, so 100 events per request
+        gives 1/5/10 signed deliveries for the 100/500/1000 acceptance points.
+        """
+        delivered = 0
+        while delivered < event_count:
+            take = min(100, event_count - delivered)
+            payload = at_now(load_delivery("message_text"))
+            template = payload["entry"][0]["messaging"][0]
+            batch = []
+            for offset in range(take):
+                item = json.loads(json.dumps(template))
+                item["message"]["mid"] = f"burst-{event_count}-{delivered + offset}"
+                batch.append(item)
+            payload["entry"][0]["messaging"] = batch
+
+            body = json.dumps(payload).encode()
+            assert len(body) <= security.max_body_bytes()
+            assert deliver(client, body, signature=sign(body)).status_code == 200
+            delivered += take
+
+        provider_ids = list(
+            WebhookEventLog.objects.filter(connection=instagram_connection).values_list("provider_event_id", flat=True)
+        )
+        assert len(provider_ids) == event_count
+        assert len(set(provider_ids)) == event_count
+        assert len(collected) == event_count
+
+
+@pytest.mark.usefixtures("instagram_app")
 class TestDeduplication:
     def test_a_redelivered_event_is_logged_once(
         self, client: Client, instagram_connection: ChannelConnection, collected: list[Any]

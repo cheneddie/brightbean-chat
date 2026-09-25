@@ -3,11 +3,13 @@
 The visual builder should let an author express "a person takes over here" as
 one terminal step instead of knowing which generic action verbs to compose.
 
-D8 owns the longer-lived inbox takeover/resume policy. This node intentionally
-does only the D7 boundary:
+D8 turns that boundary into an ownership transition through
+``apps.inbox.services.human_handoff``:
 - require the run to have a channel connection;
 - open/reopen the conversation;
 - optionally assign it to a member of this workspace;
+- extend the automation pause without shortening a longer one;
+- record a durable system audit event;
 - end the current flow successfully.
 """
 
@@ -19,7 +21,7 @@ from apps.flows.engine.context import NodeContext
 from apps.flows.engine.nodes.base import Node
 from apps.flows.engine.registry import register_node
 from apps.flows.engine.results import End, Fail, StepResult
-from apps.messaging import services as messaging
+from apps.inbox import services as inbox
 
 __all__ = ["HumanHandoffNode"]
 
@@ -41,18 +43,14 @@ class HumanHandoffNode(Node):
         if connection is None:
             return Fail("human_handoff requires a channel connection")
 
-        conversation = messaging.open_conversation(
+        raw_member = ctx.config.get("member")
+        member = _member(ctx, raw_member) if raw_member else None
+        inbox.human_handoff(
             workspace=ctx.workspace,
             contact=ctx.contact,
             connection=connection,
+            assignee=member,
         )
-
-        raw_member = ctx.config.get("member")
-        if raw_member:
-            member = _member(ctx, raw_member)
-            if member is not None:
-                messaging.assign_conversation(conversation, member)
-
         return End()
 
 

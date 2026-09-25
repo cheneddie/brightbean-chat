@@ -11,7 +11,8 @@ from django.core.management import call_command
 from django.db import connections
 from django.utils import timezone
 
-from apps.queueing.models import ActionStatus, ScheduledAction
+from apps.queueing.health import HEARTBEAT_KEY
+from apps.queueing.models import ActionStatus, QueueConsumerHeartbeat, ScheduledAction
 from apps.queueing.tests.support import make_action, temporary_handler
 from tests.support import Tenancy
 
@@ -33,6 +34,7 @@ class TestProcessTasks:
 
         assert "1 done" in out.getvalue()
         assert ScheduledAction.objects.for_workspace(tenancy.workspace).filter(status=ActionStatus.DONE).count() == 1
+        assert QueueConsumerHeartbeat.objects.get(key=HEARTBEAT_KEY).source == "worker"
 
     def test_max_batches_bounds_the_loop(self, tenancy: Tenancy) -> None:
         for _ in range(5):
@@ -134,6 +136,7 @@ class TestTick:
 
         assert "5 action(s)" in out.getvalue()
         assert ScheduledAction.objects.for_workspace(tenancy.workspace).filter(status=ActionStatus.DONE).count() == 5
+        assert QueueConsumerHeartbeat.objects.get(key=HEARTBEAT_KEY).source == "cli_tick"
 
     def test_it_leaves_work_that_is_not_due_yet(self, tenancy: Tenancy) -> None:
         make_action(tenancy.workspace, type=PROBE, run_at=timezone.now() + timedelta(hours=1))

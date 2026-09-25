@@ -25,6 +25,9 @@ from apps.flows.triggers.hooks import Stage, register_hook, unregister_hook
 from apps.flows.triggers.pipeline import route_events
 from apps.flows.triggers.serialization import event_to_payload
 from apps.inbox.models import (
+    ConversationAudit,
+    ConversationAuditEvent,
+    ConversationAuditSource,
     ConversationLabel,
     ConversationLabelLink,
     InboxRule,
@@ -181,6 +184,18 @@ class TestWhatFires:
         conversation.refresh_from_db()
         assert conversation.assignee_id == agent.pk
         assert conversation.state == ConversationState.DONE
+
+        audit = list(
+            ConversationAudit.objects.for_workspace(tenancy.workspace)
+            .filter(conversation=conversation)
+            .order_by("created_at")
+        )
+        assert [row.event for row in audit] == [
+            ConversationAuditEvent.ASSIGNED,
+            ConversationAuditEvent.STATE_DONE,
+        ]
+        assert all(row.source == ConversationAuditSource.SYSTEM for row in audit)
+        assert all(row.actor is None and row.actor_label == "" for row in audit)
 
 
 class TestWhatItRefusesToTouch:

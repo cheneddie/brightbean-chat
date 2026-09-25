@@ -5,12 +5,14 @@ from datetime import timedelta
 from typing import Any
 
 import pytest
+from django.test import override_settings
 from django.utils import timezone
 
 from apps.queueing.models import ActionStatus, ScheduledAction
 from apps.queueing.registry import (
     DuplicateHandlerError,
     IdempotencyKeyConflictError,
+    QueueAdmissionLimitError,
     get_handler,
     purge_for_contact,
     register_handler,
@@ -70,6 +72,48 @@ class TestSchedule:
         assert action.run_at == run_at
         assert action.workspace_id == tenancy.workspace.pk
         assert action.attempts == 0
+
+    @override_settings(QUEUE_MAX_ACTIVE_PER_WORKSPACE=2)
+    def test_workspace_active_backlog_is_capped(self, tenancy: Tenancy) -> None:
+        now = timezone.now()
+        schedule("t", now, workspace=tenancy.workspace)
+        schedule("t", now, workspace=tenancy.workspace)
+
+        with pytest.raises(QueueAdmissionLimitError, match="limit 2"):
+            schedule("t", now, workspace=tenancy.workspace)
+
+        assert ScheduledAction.objects.for_workspace(tenancy.workspace).count() == 2
+
+    @override_settings(QUEUE_MAX_ACTIVE_PER_WORKSPACE=1)
+    def test_terminal_rows_release_admission_capacity(self, tenancy: Tenancy) -> None:
+        now = timezone.now()
+        first = schedule("t", now, workspace=tenancy.workspace)
+        first.status = ActionStatus.DONE
+        first.save(update_fields=["status", "updated_at"])
+
+        second = schedule("t", now, workspace=tenancy.workspace)
+
+        assert second.pk != first.pk
+        assert ScheduledAction.objects.for_workspace(tenancy.workspace).count() == 2
+
+    @override_settings(QUEUE_MAX_ACTIVE_PER_WORKSPACE=1)
+    def test_idempotent_duplicate_is_allowed_at_capacity(self, tenancy: Tenancy) -> None:
+        now = timezone.now()
+        first = schedule("t", now, workspace=tenancy.workspace, idempotency_key="cap-key")
+
+        again = schedule("t", now, workspace=tenancy.workspace, idempotency_key="cap-key")
+
+        assert again.pk == first.pk
+        assert ScheduledAction.objects.for_workspace(tenancy.workspace).count() == 1
+
+    @override_settings(QUEUE_MAX_ACTIVE_PER_WORKSPACE=1)
+    def test_capacity_is_isolated_per_workspace(self, tenancy: Tenancy, other_tenancy: Tenancy) -> None:
+        now = timezone.now()
+        schedule("t", now, workspace=tenancy.workspace)
+
+        theirs = schedule("t", now, workspace=other_tenancy.workspace)
+
+        assert theirs.workspace_id == other_tenancy.workspace.pk
 
     def test_contact_accepts_an_id_a_string_or_an_object(self, tenancy: Tenancy) -> None:
         """L2-A and L3-B hold Contact instances; housekeeping holds nothing."""
@@ -186,6 +230,30 @@ class TestTheSystemBoundary:
     def test_the_error_names_the_alternative(self) -> None:
         with pytest.raises(ValueError, match="schedule_system"):
             schedule("t", timezone.now(), workspace=None)
+
+    @override_settings(QUEUE_MAX_ACTIVE_PER_WORKSPACE=1)
+    def test_operational_notification_email_has_reserved_capacity(self, tenancy: Tenancy) -> None:
+        now = timezone.now()
+        schedule("t", now, workspace=tenancy.workspace)
+
+        reserved = schedule(
+            "notification_email",
+            now,
+            {"delivery_id": "reserved"},
+            workspace=tenancy.workspace,
+            idempotency_key="reserved-notification",
+        )
+
+        assert reserved.workspace_id == tenancy.workspace.pk
+        assert reserved.type == "notification_email"
+
+    @override_settings(QUEUE_MAX_ACTIVE_PER_WORKSPACE=1)
+    def test_system_rows_are_exempt_from_tenant_admission(self) -> None:
+        first = schedule_system("housekeeping", timezone.now())
+        second = schedule_system("housekeeping", timezone.now())
+
+        assert first.pk != second.pk
+        assert ScheduledAction.objects.unscoped().filter(workspace__isnull=True).count() == 2
 
     def test_schedule_system_creates_the_deployment_level_row(self) -> None:
         action = schedule_system("housekeeping", timezone.now(), idempotency_key="sys-1")

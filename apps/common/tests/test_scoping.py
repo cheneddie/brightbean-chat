@@ -158,6 +158,10 @@ NOT_TENANT_DATA: dict[str, str] = {
     ),
     "messaging.SendBucket": "Rate-limit state per connection. Not tenant data; not readable as any.",
     "common.RateLimitCounter": "Deployment-wide counters keyed by a hashed identity.",
+    "queueing.QueueConsumerHeartbeat": (
+        "Deployment-level liveness state shared by every supported queue consumer; it belongs to "
+        "the installation, not to any workspace."
+    ),
     "notifications.Notification": (
         "Addressed to a user, and the bell reads across every workspace they belong to. The "
         "workspace is denormalised into ``payload`` rather than being a column, which is what "

@@ -617,6 +617,49 @@ with volume.
 On a host you control, `python manage.py tick` is the same drain as a one-shot
 command (55-second budget, sized for a once-a-minute cron).
 
+### Queue operational status
+
+When `TICK_TOKEN` is configured, the same credential also protects a read-only
+operations endpoint:
+
+```text
+https://<your-host>/internal/queue-status?token=<TICK_TOKEN>
+```
+
+Unlike `/internal/tick`, this endpoint **never drains or repairs the queue**.
+It reports:
+
+- due pending actions;
+- running actions;
+- running actions older than the zombie-recovery threshold;
+- terminal failures recorded in the last 24 hours;
+- age of the oldest already-due pending action.
+
+The JSON `status` is:
+
+- `ok` — no stale running work and no aged backlog/recent terminal failure;
+- `degraded` — backlog exceeded `QUEUE_STATUS_OVERDUE_WARN_SECONDS` (60 seconds
+  by default), or a terminal failure was recorded in the last 24 hours;
+- `error` — at least one running row is already older than zombie recovery.
+  This response is HTTP 503 so an uptime monitor can alert without parsing JSON.
+
+A degraded response remains HTTP 200 because a short burst or one isolated
+terminal failure should be visible without making an otherwise healthy web
+process fail its liveness check.
+
+Every supported queue consumer updates one deployment heartbeat:
+
+- `process_tasks` records source `worker`;
+- `manage.py tick` records source `cli_tick`;
+- `/internal/tick` records source `http_tick`.
+
+If that heartbeat is missing or older than
+`QUEUE_CONSUMER_HEARTBEAT_MAX_AGE_SECONDS` (120 seconds by default),
+`/internal/queue-status` answers HTTP 503 even when the queue is empty. For
+tick mode, set the threshold comfortably above the scheduler interval; a
+five-minute scheduler with the 120-second default will correctly look stale
+between ticks.
+
 ---
 
 ## Environment variables
@@ -635,6 +678,7 @@ deployment actually decides:
 |---|---|
 | `SECRET_KEY` | Django's signing key, and the input to credential encryption. The app refuses to boot without it outside `DEBUG`. |
 | `ENCRYPTION_KEY_SALT` | HKDF salt for the AES-256-GCM encrypted fields. A *different* random value. |
+| `ENCRYPTION_KEY_FALLBACKS` | Temporary JSON list of previous `{secret_key, salt}` pairs during a planned key rotation. Reads/verification may use them; new writes never do. |
 | `ALLOWED_HOSTS` | Hostnames this deployment answers on. Anything else gets a 400. Derived from `APP_DOMAIN` in the compose stack. |
 | `APP_URL` | The public origin, with scheme. Unsubscribe, click-tracking and media links are built from it. |
 | `DATABASE_URL` | Postgres connection string. |
@@ -712,6 +756,80 @@ useless; kept together they are one compromise. Kept nowhere, a restored dump is
 a database full of credentials nobody can read — and the recovery for that is
 re-connecting every channel by hand.
 
+### Rotating encryption keys
+
+There are two different rotations. Do not treat them as the same operation.
+
+#### Planned at-rest rotation: prefer changing the salt first
+
+For routine key hygiene, keep `SECRET_KEY` unchanged and rotate
+`ENCRYPTION_KEY_SALT`. This changes the AES-GCM key and every keyed lookup
+digest without invalidating Django-signed unsubscribe/click/OAuth-state tokens.
+
+1. Take a fresh database backup and verify where the current `SECRET_KEY` and
+   `ENCRYPTION_KEY_SALT` are stored.
+2. Generate a new `ENCRYPTION_KEY_SALT`.
+3. Set the new salt as primary and put the previous pair in one-line JSON:
+
+   ```text
+   SECRET_KEY=<same current secret>
+   ENCRYPTION_KEY_SALT=<new salt>
+   ENCRYPTION_KEY_FALLBACKS=[{"secret_key":"<same current secret>","salt":"<old salt>"}]
+   ```
+
+4. Restart both web and worker together. A mixed generation is safe for reads,
+   but every process should agree on which generation is primary.
+5. Check the migration plan without writing:
+
+   ```bash
+   python manage.py rotate_encrypted_data --dry-run
+   ```
+
+6. Rewrite recoverable encrypted fields under the primary generation:
+
+   ```bash
+   python manage.py rotate_encrypted_data
+   ```
+
+   This re-encrypts every `EncryptedTextField` / `EncryptedJSONField` and
+   recomputes `ChannelConnection.webhook_secret_digest` from its recoverable
+   encrypted plaintext.
+7. Exercise channel webhooks and API auth. API keys presented successfully
+   during this window lazy-rehash their digest onto the primary generation.
+8. Do **not** remove the fallback merely because the command completed.
+   Digest-only values cannot all be migrated offline:
+   - active API keys need to be used once under fallback or explicitly rotated;
+   - live invitation links need to be resent or allowed to expire;
+   - live flow preview handles lazy-rehash when claimed and otherwise expire
+     after their short TTL.
+9. Once those old-generation opaque credentials are gone, remove
+   `ENCRYPTION_KEY_FALLBACKS`, restart, and verify stored credentials plus
+   webhook/API/invitation flows again.
+
+#### Rotating `SECRET_KEY` too
+
+Changing `SECRET_KEY` also changes Django signatures. The application derives
+`SECRET_KEY_FALLBACKS` automatically from the `secret_key` values in
+`ENCRYPTION_KEY_FALLBACKS`, so a **planned** full rotation can temporarily keep
+old signed tokens valid.
+
+That continuity has a cost: some public links, especially unsubscribe links,
+may be intentionally long-lived. Keeping an old signing key forever is not a
+completed rotation. Decide which of these two outcomes you want:
+
+- preserve old signed links for a migration window, then remove the fallback
+  and accept that older links stop verifying; or
+- rotate only `ENCRYPTION_KEY_SALT` for periodic at-rest key hygiene and leave
+  `SECRET_KEY` stable.
+
+#### Compromised key: do not preserve the attacker's key as fallback
+
+If either old key material is known or suspected to be compromised, continuity
+is secondary. Replace the primary values, re-encrypt recoverable data, rotate
+or revoke API keys/channel secrets as appropriate, and invalidate old signed
+links. Do **not** keep a compromised pair in `ENCRYPTION_KEY_FALLBACKS` merely
+to avoid user-visible breakage.
+
 ### Uploaded media
 
 Media lives in the `media_data` volume (or in your S3 bucket, if
@@ -726,38 +844,76 @@ docker run --rm -v brightbean-chat_media_data:/media -v "$PWD":/backup alpine \
 
 ## Upgrades
 
+Build or pull the new image **before** touching the database, then use the
+migration preflight against that exact image.
+
 ```bash
 git pull
 docker compose -f docker-compose.prod.yml build
-docker compose -f docker-compose.prod.yml run --rm migrate
-docker compose -f docker-compose.prod.yml up -d
 ```
 
 **There is no published image to pull.** This project builds its image from
 source and does not push one to a registry, so `IMAGE_TAG` names the image this
-file builds locally — `docker compose pull` has nothing to fetch. Building on
-the host is the supported upgrade, and it is what the commands above do.
+file builds locally — `docker compose pull` has nothing to fetch. If your fork
+does publish an image, set `IMAGE_REPOSITORY` / `IMAGE_TAG` and pull it instead.
 
-If you run a fork that *does* publish an image, point `IMAGE_REPOSITORY` at it
-in `.env` (`ghcr.io/you/brightbean-chat`, say) and `IMAGE_TAG` at the release;
-then `pull` works and you can skip the build:
+### Safe migration order
 
-```bash
-docker compose -f docker-compose.prod.yml pull
-docker compose -f docker-compose.prod.yml run --rm migrate   # or: make prod-migrate
-docker compose -f docker-compose.prod.yml up -d
-```
+1. **Take and verify a database backup first.** Use the [Backups](#backups)
+   procedure above. The preflight can classify risk; it cannot prove that a
+   restorable dump exists somewhere outside this database.
+2. Inspect the exact pending plan:
 
-The one-shot `migrate` service runs the same migrations the stack runs at boot,
-so running it explicitly first is belt and braces — it means the new image
-starts against a schema that is already current instead of migrating while the
-old release is still serving.
+   ```bash
+   make prod-migration-check
+   ```
 
-Take a database backup before an upgrade that includes migrations. Migrations
-are not reversible in general, and the version you roll back to may not
-understand the schema the newer one wrote.
+   The command fails on migration-graph conflicts and on pending operations
+   that are irreversible, destructive (`RemoveField` / `DeleteModel`) or run
+   custom Python/SQL. Those operations are not forbidden; they require an
+   explicit rollback decision.
+3. If the reported risky operations are expected, inspect their forward and
+   reverse code, confirm the backup is restorable, then acknowledge that
+   review explicitly:
 
-Then re-run the smoke script.
+   ```bash
+   make prod-migration-check ARGS=--allow-risky
+   ```
+
+4. Apply migrations:
+
+   ```bash
+   make prod-migrate
+   ```
+
+5. Prove the database reached every migration leaf:
+
+   ```bash
+   make prod-migration-verify
+   ```
+
+6. Start/restart the application and worker on the new image:
+
+   ```bash
+   docker compose -f docker-compose.prod.yml up -d
+   ```
+
+7. Re-run the smoke script and check `/internal/queue-status` when configured.
+
+The one-shot `migrate` service depends on healthy Postgres but not on the web
+process, so these checks run before the new release begins serving requests.
+`migration_readiness` inspects Django's real migration graph and the database's
+applied set; it is not a filename heuristic.
+
+### Rollback rule
+
+Application rollback and database rollback are separate decisions. Rolling the
+image back does **not** undo a migration. If the new migration is additive and
+the old release tolerates the new schema, rolling only the image back may be
+safe. If a migration removed/rewrote data or changed a contract the old release
+depends on, restore the verified database backup or execute a reviewed reverse
+migration before starting the old image. Never run `migrate <old target>`
+blindly just because Django labels an operation reversible.
 
 ---
 
@@ -799,6 +955,10 @@ job and CI enforces the automatable ones. These are yours:
       process do queue work.
 - [ ] **Watch `/healthz`** with something that will tell you. It fails closed on
       a database problem, which is the failure you want to hear about first.
+- [ ] **Run or schedule `ops_snapshot`.** `make prod-ops ARGS="--json --fail-on-error"` gives a vendor-neutral deployment check for queue consumers, backlog, webhook processing and channel re-auth. See [`PRODUCTION-INCIDENT-RUNBOOK.md`](PRODUCTION-INCIDENT-RUNBOOK.md).
+- [ ] **If `TICK_TOKEN` is configured, also watch `/internal/queue-status`.**
+      Alert on HTTP 503 immediately; treat `status=degraded` as an operator
+      warning and investigate aged backlog or recent terminal failures.
 
 Found a vulnerability in the software rather than in a deployment? See
 [`SECURITY.md`](../SECURITY.md).

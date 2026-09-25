@@ -64,7 +64,7 @@ from apps.channels.models import (
     FlowPreviewLink,
     generate_preview_handle,
 )
-from apps.common.encryption import hmac_digest
+from apps.common.encryption import hmac_digest, hmac_digest_candidates
 from apps.common.platforms import Platform
 
 logger = logging.getLogger(__name__)
@@ -274,12 +274,13 @@ def _claim(connection: ChannelConnection, handle: str, chat_id: str) -> FlowPrev
         return None
     now = timezone.now()
     digest = hmac_digest(handle)
+    digest_candidates = hmac_digest_candidates(handle)
     # Cross-tenant by necessity: this runs on the inbound webhook path, which
     # has no session and therefore no workspace. What bounds it is the pair of
     # the handle — 192 bits of urandom, digest keyed on SECRET_KEY — and the
     # connection the delivery was verified against.
     rows = FlowPreviewLink.objects.unscoped().filter(
-        handle_digest=digest,
+        handle_digest__in=digest_candidates,
         channel_connection=connection,
         expires_at__gt=now,
     )
@@ -294,8 +295,20 @@ def _claim(connection: ChannelConnection, handle: str, chat_id: str) -> FlowPrev
         # Cross-tenant for the same reason as the filter above. Re-read through
         # the same predicate, so a row that stopped matching between the two
         # statements is not resurrected here.
-        link = rows.select_related("flow", "flow__workspace", "channel_connection").first()
-    if link is None or link.channel_connection.status == ConnectionStatus.DISABLED:
+        # The inbound webhook already resolved and verified `connection`.
+        # Re-reading it here used to decrypt its credentials/webhook secret as a
+        # side effect of select_related(), which made an opaque preview-handle
+        # claim depend on unrelated encrypted fields surviving key rotation.
+        # The link only needs its flow; use the verified connection argument for
+        # the final status gate below.
+        link = rows.select_related("flow", "flow__workspace").first()
+        if link is not None and link.handle_digest != digest:
+            FlowPreviewLink.objects.unscoped().filter(pk=link.pk, handle_digest=link.handle_digest).update(
+                handle_digest=digest,
+                updated_at=now,
+            )
+            link.handle_digest = digest
+    if link is None or connection.status == ConnectionStatus.DISABLED:
         return None
     return link
 

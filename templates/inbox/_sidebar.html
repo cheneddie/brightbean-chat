@@ -113,3 +113,24 @@ or PSID. All of it renders escaped; none of it becomes a URL.
     </div>
   {% endfor %}
 {% endif %}
+
+
+<div class="ib-side-label">Activity</div>
+<div class="mt-1 space-y-2">
+  {% for event in audit_events %}
+    <div class="text-xs" style="color: var(--text-tertiary);">
+      <div>
+        <span style="color: var(--text-secondary);">{{ event.get_event_display }}</span>
+        ·
+        {% if event.source == "human" %}
+          {% if event.actor_label %}{{ event.actor_label }}{% else %}Former member{% endif %}
+        {% else %}
+          System
+        {% endif %}
+      </div>
+      <div>{{ event.created_at|date:"j M Y H:i" }}</div>
+    </div>
+  {% empty %}
+    <p class="text-xs" style="color: var(--text-tertiary);">No ownership changes yet.</p>
+  {% endfor %}
+</div>
