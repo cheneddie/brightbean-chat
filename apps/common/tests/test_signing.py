@@ -88,6 +88,7 @@ class TestSecretKeyRotation:
         with pytest.raises(InvalidTokenError):
             unsign(token, purpose="unsubscribe")
 
+
 class TestVersionMigration:
     """A format change has to be a rollout, not a cutover.
 
