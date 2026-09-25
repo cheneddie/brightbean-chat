@@ -357,11 +357,7 @@ def _schedule(
         # Idempotency is checked before capacity: repeating work that is already
         # arranged must remain a no-op even when the workspace is at its limit.
         if idempotency_key is not None:
-            existing = (
-                ScheduledAction.objects.for_workspace(workspace)
-                .filter(idempotency_key=idempotency_key)
-                .first()
-            )
+            existing = ScheduledAction.objects.for_workspace(workspace).filter(idempotency_key=idempotency_key).first()
             if existing is not None:
                 return existing
 
