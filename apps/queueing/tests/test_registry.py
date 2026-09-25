@@ -232,6 +232,22 @@ class TestTheSystemBoundary:
             schedule("t", timezone.now(), workspace=None)
 
     @override_settings(QUEUE_MAX_ACTIVE_PER_WORKSPACE=1)
+    def test_operational_notification_email_has_reserved_capacity(self, tenancy: Tenancy) -> None:
+        now = timezone.now()
+        schedule("t", now, workspace=tenancy.workspace)
+
+        reserved = schedule(
+            "notification_email",
+            now,
+            {"delivery_id": "reserved"},
+            workspace=tenancy.workspace,
+            idempotency_key="reserved-notification",
+        )
+
+        assert reserved.workspace_id == tenancy.workspace.pk
+        assert reserved.type == "notification_email"
+
+    @override_settings(QUEUE_MAX_ACTIVE_PER_WORKSPACE=1)
     def test_system_rows_are_exempt_from_tenant_admission(self) -> None:
         first = schedule_system("housekeeping", timezone.now())
         second = schedule_system("housekeeping", timezone.now())
