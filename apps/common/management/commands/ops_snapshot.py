@@ -46,14 +46,8 @@ def collect_snapshot(now: Any = None) -> OpsSnapshot:
     queue_failed = actions.filter(status="failed", updated_at__gte=now - timedelta(hours=24)).count()
 
     heartbeat = heartbeat_model._base_manager.filter(pk="queue").first()
-    heartbeat_age = (
-        max(0, int((now - heartbeat.last_seen_at).total_seconds()))
-        if heartbeat is not None
-        else None
-    )
-    heartbeat_max_age = max(
-        1, int(getattr(settings, "QUEUE_CONSUMER_HEARTBEAT_MAX_AGE_SECONDS", 120))
-    )
+    heartbeat_age = max(0, int((now - heartbeat.last_seen_at).total_seconds())) if heartbeat is not None else None
+    heartbeat_max_age = max(1, int(getattr(settings, "QUEUE_CONSUMER_HEARTBEAT_MAX_AGE_SECONDS", 120)))
     heartbeat_stale = heartbeat_age is None or heartbeat_age > heartbeat_max_age
 
     failure_window = max(1, int(getattr(settings, "OPS_WEBHOOK_FAILURE_WINDOW_SECONDS", 900)))
