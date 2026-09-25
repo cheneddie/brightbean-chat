@@ -13,6 +13,7 @@ from typing import Any
 
 from django.core.management.base import BaseCommand
 
+from apps.queueing.health import touch_queue_consumer
 from apps.queueing.housekeeping import ensure_housekeeping_scheduled
 from apps.queueing.worker import DEFAULT_BATCH_SIZE, drain, positive_int
 
@@ -28,7 +29,9 @@ class Command(BaseCommand):
 
     def handle(self, *args: Any, **options: Any) -> None:
         ensure_housekeeping_scheduled()
+        touch_queue_consumer("cli_tick", force=True)
         result = drain(batch_size=options["batch_size"], max_seconds=options["max_seconds"])
+        touch_queue_consumer("cli_tick", force=True)
         logger.info(
             "Tick drained claimed=%s done=%s failed=%s retried=%s stranded=%s",
             result.claimed,
