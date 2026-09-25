@@ -142,6 +142,39 @@ class TestDataDeletionCallback:
         assert response.status_code == 404
         assert ChannelConnection.objects.unscoped().filter(pk=instagram_connection.pk).exists()
 
+    def test_status_capability_survives_planned_key_rotation(
+        self,
+        client: Client,
+        instagram_app: dict[str, str],
+        instagram_connection: ChannelConnection,
+        settings: Any,
+    ) -> None:
+        _bind_lifecycle(instagram_connection)
+        response = _post(client, reverse("instagram_data_deletion"), _signed_request())
+        code = response.json()["confirmation_code"]
+        status_url = reverse("instagram_data_deletion_status", kwargs={"confirmation_code": code})
+        receipt = MetaDataDeletionReceipt.objects.get()
+        old_digest = receipt.confirmation_digest
+        old_secret = settings.SECRET_KEY
+        old_salt = settings.ENCRYPTION_KEY_SALT
+
+        settings.SECRET_KEY = "new-deletion-receipt-secret"
+        settings.ENCRYPTION_KEY_SALT = b"new-deletion-receipt-salt"
+        settings.ENCRYPTION_KEY_FALLBACKS = [
+            {"secret_key": old_secret, "salt": old_salt.decode("utf-8")}
+        ]
+
+        assert client.get(status_url).status_code == 200
+        receipt.refresh_from_db()
+
+        from apps.common.encryption import hmac_digest
+
+        assert receipt.confirmation_digest == hmac_digest(code)
+        assert receipt.confirmation_digest != old_digest
+
+        settings.ENCRYPTION_KEY_FALLBACKS = []
+        assert client.get(status_url).status_code == 200
+
     def test_unknown_status_capability_is_404(self, client: Client) -> None:
         status_url = reverse("instagram_data_deletion_status", kwargs={"confirmation_code": "unknown"})
         response = client.get(status_url)
@@ -227,6 +260,46 @@ class TestOrganizationScopedCallbacks:
         assert not ChannelConnection.objects.unscoped().filter(pk=instagram_connection.pk).exists()
         assert ChannelConnection.objects.unscoped().filter(pk=other.pk).exists()
         assert MetaDataDeletionReceipt.objects.get().deleted_connections == 1
+
+    def test_byo_deauthorize_uses_the_same_org_boundary(
+        self,
+        client: Client,
+        tenancy: Tenancy,
+        instagram_connection: ChannelConnection,
+    ) -> None:
+        self._configure_org_app(tenancy, secret="deauth-org-secret")
+        _bind_lifecycle(instagram_connection)
+        url = reverse(
+            "instagram_organization_deauthorize",
+            kwargs={"organization_id": tenancy.organization.pk},
+        )
+
+        response = _post(client, url, _signed_request(secret="deauth-org-secret"))
+
+        assert response.status_code == 200
+        assert response.json() == {"status": "ok"}
+        assert not ChannelConnection.objects.unscoped().filter(pk=instagram_connection.pk).exists()
+        assert not MetaDataDeletionReceipt.objects.exists()
+
+    def test_generic_callback_never_tries_an_organization_secret(
+        self,
+        client: Client,
+        settings: Any,
+        tenancy: Tenancy,
+        instagram_connection: ChannelConnection,
+    ) -> None:
+        settings.PLATFORM_CREDENTIALS_FROM_ENV = {}
+        self._configure_org_app(tenancy, secret="org-only-secret")
+        _bind_lifecycle(instagram_connection)
+
+        response = _post(
+            client,
+            reverse("instagram_data_deletion"),
+            _signed_request(secret="org-only-secret"),
+        )
+
+        assert response.status_code == 404
+        assert ChannelConnection.objects.unscoped().filter(pk=instagram_connection.pk).exists()
 
     def test_org_url_never_tries_another_organizations_secret(
         self,
