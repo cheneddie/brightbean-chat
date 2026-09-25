@@ -53,9 +53,15 @@ Three things, and the third is the one that takes weeks rather than minutes.
    ```
 
    Both verify Meta `signed_request` with the deployment Instagram app secret.
-   The deletion callback removes the matching connected professional account
-   locally and returns a confirmation/status URL. A bad signature cannot delete
-   anything.
+   The OAuth code exchange identity is stored separately as
+   `meta_app_scoped_user_id`; the professional account id used for webhook
+   routing remains `external_id`. Lifecycle callbacks resolve **only** by the
+   app-scoped lifecycle identity and never guess by `external_id`.
+
+   A single lifecycle identity may have authorised more than one professional
+   account, so the deletion callback removes every matching Instagram
+   connection locally and returns a confirmation/status URL. A bad signature
+   cannot delete anything.
 
    **Credential boundary:** these generic lifecycle URLs require a complete
    deployment-level `PLATFORM_INSTAGRAM_CLIENT_ID` +
