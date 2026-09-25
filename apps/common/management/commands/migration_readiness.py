@@ -67,10 +67,7 @@ class Command(BaseCommand):
         executor = MigrationExecutor(connection)
         conflicts = executor.loader.detect_conflicts()
         if conflicts:
-            rendered = "; ".join(
-                f"{app}: {', '.join(sorted(names))}"
-                for app, names in sorted(conflicts.items())
-            )
+            rendered = "; ".join(f"{app}: {', '.join(sorted(names))}" for app, names in sorted(conflicts.items()))
             raise CommandError(f"Migration graph has conflicting leaf nodes: {rendered}")
 
         targets = executor.loader.graph.leaf_nodes()
@@ -98,11 +95,7 @@ class Command(BaseCommand):
         if risks:
             self.stdout.write(self.style.WARNING("Pending migration risk review:"))
             for risk in risks:
-                self.stdout.write(
-                    self.style.WARNING(
-                        f"  - {risk.migration}: {risk.operation} — {risk.reason}"
-                    )
-                )
+                self.stdout.write(self.style.WARNING(f"  - {risk.migration}: {risk.operation} — {risk.reason}"))
             if not options["allow_risky"]:
                 raise CommandError(
                     "Risky pending migration operations require a verified backup/rollback plan. "
