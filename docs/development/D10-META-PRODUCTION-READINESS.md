@@ -28,14 +28,17 @@ Security contract:
 - callback body is capped at 16 KiB before form parsing;
 - `signed_request` is strict Base64URL + HMAC-SHA256 verified;
 - only a complete **deployment-level** Instagram Meta app secret may verify the generic callbacks;
-- the signed Meta user id is used only to locate the deployment-wide unique Instagram `ChannelConnection.external_id`;
+- OAuth stores the code-exchange identity separately as `ChannelConnection.meta_app_scoped_user_id`;
+- `external_id` remains the professional-account/webhook-routing id;
+- lifecycle callbacks resolve only by `meta_app_scoped_user_id` and never fall back to `external_id`;
+- one lifecycle identity may delete more than one connected professional account;
 - deletion is idempotent (already absent => completed with zero rows deleted);
 - no plaintext signed request, Meta user id or confirmation code is stored in the receipt;
 - the receipt stores only confirmation HMAC, platform, deleted connection count and timestamps;
 - wrong signature cannot delete a connection;
 - missing deployment app configuration makes the callback 404.
 
-Deleting the channel connection intentionally reuses existing FK cascades for
+Deleting matched channel connections intentionally reuses existing FK cascades for
 channel-owned conversations, identities and trigger bindings. It does **not**
 hard-delete every CRM Contact in the workspace: those contacts are third parties
 who messaged the connected business, not the connected business account itself.
