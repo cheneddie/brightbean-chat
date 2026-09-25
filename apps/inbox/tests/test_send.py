@@ -15,6 +15,7 @@ from django.utils import timezone
 from apps.channels.events import TextBlock
 from apps.channels.tests.fake_adapter import registered
 from apps.common.platforms import Platform
+from apps.inbox.models import ConversationAudit, ConversationAuditEvent, ConversationAuditSource
 from apps.messaging.codes import Denial, describe
 from apps.messaging.models import (
     ContactChannelIdentity,
@@ -24,7 +25,7 @@ from apps.messaging.models import (
     MessageSource,
     MessageStatus,
 )
-from apps.messaging.services import AGENT_AUTOMATION_PAUSE
+from apps.messaging.services import AGENT_AUTOMATION_PAUSE, pause_automation
 
 pytestmark = pytest.mark.django_db
 
@@ -49,12 +50,9 @@ class TestAnAgentReply:
         assert message.status == MessageStatus.SENT
         assert len(adapter.sends) == 1
 
-    def test_it_pauses_automation_for_the_facades_own_constant(
-        self, agent_client: Any, url_for: Any, conversation: Conversation, identity: Any
+    def test_it_establishes_an_audited_takeover_pause_before_replying(
+        self, tenancy: Any, agent_client: Any, url_for: Any, conversation: Conversation, identity: Any
     ) -> None:
-        """SPEC §14's thirty minutes, asserted against the exported constant
-        rather than the number: the pause lives inside send_as_agent, and the
-        inbox must not be a second place that decides how long it is."""
         before = timezone.now()
 
         with registered(Platform.TELEGRAM):
@@ -64,6 +62,14 @@ class TestAnAgentReply:
         assert conversation.automation_paused_until is not None
         assert conversation.automation_paused_until >= before + AGENT_AUTOMATION_PAUSE
         assert conversation.automation_paused_until <= timezone.now() + AGENT_AUTOMATION_PAUSE
+
+        audit = ConversationAudit.objects.for_workspace(tenancy.workspace).get(
+            conversation=conversation,
+            event=ConversationAuditEvent.AUTOMATION_PAUSED,
+        )
+        assert audit.actor_id == tenancy.user_for("agent").pk
+        assert audit.source == ConversationAuditSource.HUMAN
+        assert audit.metadata["reason"] == "agent_takeover"
 
     def test_an_empty_reply_is_refused_without_touching_the_thread(
         self, agent_client: Any, url_for: Any, conversation: Conversation, identity: Any
@@ -75,6 +81,9 @@ class TestAnAgentReply:
         assert "Nothing to send" in response.headers["HX-Trigger"]
         assert not _messages(conversation).exists()
         assert adapter.sends == []
+        conversation.refresh_from_db()
+        assert conversation.automation_paused_until is None
+        assert not ConversationAudit.objects.for_workspace(conversation.workspace_id).exists()
 
     def test_a_reply_past_the_cap_is_refused_here_rather_than_at_the_adapter(
         self, agent_client: Any, url_for: Any, conversation: Conversation, identity: Any
@@ -89,6 +98,18 @@ class TestAnAgentReply:
         assert response.status_code == 204
         assert adapter.sends == []
         assert not _messages(conversation).exists()
+
+    def test_agent_takeover_never_shortens_a_longer_manual_pause(
+        self, agent_client: Any, url_for: Any, conversation: Conversation, identity: Any
+    ) -> None:
+        longer = timezone.now() + timedelta(hours=2)
+        pause_automation(conversation, longer)
+
+        with registered(Platform.TELEGRAM):
+            agent_client.post(url_for("send", conversation_id=conversation.pk), {"body": "hello"})
+
+        conversation.refresh_from_db()
+        assert conversation.automation_paused_until == longer
 
     def test_a_double_submit_sends_once(
         self, agent_client: Any, url_for: Any, conversation: Conversation, identity: Any
@@ -200,6 +221,12 @@ class TestRetry:
         assert isinstance(block, TextBlock)
         assert block.text == "please reply"
         assert _messages(conversation).filter(status=MessageStatus.SENT).count() == 1
+        audit = ConversationAudit.objects.for_workspace(conversation.workspace_id).get(
+            conversation=conversation,
+            event=ConversationAuditEvent.AUTOMATION_PAUSED,
+        )
+        assert audit.source == ConversationAuditSource.HUMAN
+        assert audit.metadata["reason"] == "agent_takeover"
 
     def test_a_double_click_retries_once(
         self, agent_client: Any, url_for: Any, conversation: Conversation, identity: Any

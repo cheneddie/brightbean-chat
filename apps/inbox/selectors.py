@@ -37,6 +37,7 @@ from django.utils.timesince import timesince
 
 from apps.contacts.models import Contact
 from apps.inbox.models import (
+    ConversationAudit,
     ConversationLabel,
     ConversationLabelLink,
     ConversationRead,
@@ -68,6 +69,7 @@ __all__ = [
     "list_version",
     "pending_reminders_for",
     "pending_replies_for",
+    "recent_audit_events",
     "live_execution_for",
     "thread_messages",
     "unread_count_for",
@@ -337,6 +339,17 @@ def conversation_version(workspace: Any, conversation: Conversation) -> tuple[An
         .aggregate(latest=Max("updated_at"), total=Count("id"))
     )
     return (conversation.updated_at, messages["latest"], messages["total"])
+
+
+def recent_audit_events(workspace: Any, conversation: Conversation, *, limit: int = 20) -> list[ConversationAudit]:
+    """Newest ownership/state audit rows for the sidebar."""
+    safe_limit = max(1, min(int(limit), 50))
+    return list(
+        ConversationAudit.objects.for_workspace(workspace)
+        .filter(conversation=conversation)
+        .select_related("actor")
+        .order_by("-created_at", "-id")[:safe_limit]
+    )
 
 
 def live_execution_for(workspace: Any, contact: Contact) -> Any:

@@ -644,6 +644,27 @@ class TestTheAgentPause:
         conversation.refresh_from_db()
         assert conversation.automation_paused_until == long_pause
 
+    def test_a_stale_conversation_instance_cannot_shorten_a_newer_pause(
+        self, tenancy: Any, contact: Any, connection: Any
+    ) -> None:
+        stale = services.open_conversation(
+            workspace=tenancy.workspace,
+            contact=contact,
+            connection=connection,
+        )
+        fresh = Conversation.objects.for_workspace(tenancy.workspace).get(pk=stale.pk)
+        long_pause = timezone.now() + timedelta(hours=2)
+        services.pause_automation(fresh, long_pause)
+
+        extended = services.extend_automation_pause(
+            stale,
+            services.AGENT_AUTOMATION_PAUSE,
+        )
+
+        assert extended.automation_paused_until == long_pause
+        stale.refresh_from_db()
+        assert stale.automation_paused_until == long_pause
+
 
 class TestInternalNotes:
     def test_a_note_is_stored_and_never_sent(self, tenancy: Any, contact: Any, connection: Any, identity: Any) -> None:
