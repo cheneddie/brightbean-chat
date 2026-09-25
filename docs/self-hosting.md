@@ -844,38 +844,76 @@ docker run --rm -v brightbean-chat_media_data:/media -v "$PWD":/backup alpine \
 
 ## Upgrades
 
+Build or pull the new image **before** touching the database, then use the
+migration preflight against that exact image.
+
 ```bash
 git pull
 docker compose -f docker-compose.prod.yml build
-docker compose -f docker-compose.prod.yml run --rm migrate
-docker compose -f docker-compose.prod.yml up -d
 ```
 
 **There is no published image to pull.** This project builds its image from
 source and does not push one to a registry, so `IMAGE_TAG` names the image this
-file builds locally — `docker compose pull` has nothing to fetch. Building on
-the host is the supported upgrade, and it is what the commands above do.
+file builds locally — `docker compose pull` has nothing to fetch. If your fork
+does publish an image, set `IMAGE_REPOSITORY` / `IMAGE_TAG` and pull it instead.
 
-If you run a fork that *does* publish an image, point `IMAGE_REPOSITORY` at it
-in `.env` (`ghcr.io/you/brightbean-chat`, say) and `IMAGE_TAG` at the release;
-then `pull` works and you can skip the build:
+### Safe migration order
 
-```bash
-docker compose -f docker-compose.prod.yml pull
-docker compose -f docker-compose.prod.yml run --rm migrate   # or: make prod-migrate
-docker compose -f docker-compose.prod.yml up -d
-```
+1. **Take and verify a database backup first.** Use the [Backups](#backups)
+   procedure above. The preflight can classify risk; it cannot prove that a
+   restorable dump exists somewhere outside this database.
+2. Inspect the exact pending plan:
 
-The one-shot `migrate` service runs the same migrations the stack runs at boot,
-so running it explicitly first is belt and braces — it means the new image
-starts against a schema that is already current instead of migrating while the
-old release is still serving.
+   ```bash
+   make prod-migration-check
+   ```
 
-Take a database backup before an upgrade that includes migrations. Migrations
-are not reversible in general, and the version you roll back to may not
-understand the schema the newer one wrote.
+   The command fails on migration-graph conflicts and on pending operations
+   that are irreversible, destructive (`RemoveField` / `DeleteModel`) or run
+   custom Python/SQL. Those operations are not forbidden; they require an
+   explicit rollback decision.
+3. If the reported risky operations are expected, inspect their forward and
+   reverse code, confirm the backup is restorable, then acknowledge that
+   review explicitly:
 
-Then re-run the smoke script.
+   ```bash
+   make prod-migration-check ARGS=--allow-risky
+   ```
+
+4. Apply migrations:
+
+   ```bash
+   make prod-migrate
+   ```
+
+5. Prove the database reached every migration leaf:
+
+   ```bash
+   make prod-migration-verify
+   ```
+
+6. Start/restart the application and worker on the new image:
+
+   ```bash
+   docker compose -f docker-compose.prod.yml up -d
+   ```
+
+7. Re-run the smoke script and check `/internal/queue-status` when configured.
+
+The one-shot `migrate` service depends on healthy Postgres but not on the web
+process, so these checks run before the new release begins serving requests.
+`migration_readiness` inspects Django's real migration graph and the database's
+applied set; it is not a filename heuristic.
+
+### Rollback rule
+
+Application rollback and database rollback are separate decisions. Rolling the
+image back does **not** undo a migration. If the new migration is additive and
+the old release tolerates the new schema, rolling only the image back may be
+safe. If a migration removed/rewrote data or changed a contract the old release
+depends on, restore the verified database backup or execute a reviewed reverse
+migration before starting the old image. Never run `migrate <old target>`
+blindly just because Django labels an operation reversible.
 
 ---
 
