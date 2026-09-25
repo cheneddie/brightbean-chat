@@ -219,7 +219,7 @@ def test_fair_claiming_remains_disjoint_across_concurrent_workers() -> None:
     claimed: list[tuple[Any, Any]] = []
     failures: list[BaseException] = []
 
-    def claim(name: str) -> None:
+    def claim() -> None:
         try:
             connections.close_all()
             barrier.wait(timeout=10)
@@ -233,8 +233,8 @@ def test_fair_claiming_remains_disjoint_across_concurrent_workers() -> None:
             connections.close_all()
 
     threads = [
-        threading.Thread(target=claim, args=("worker-1",), name="fair-worker-1"),
-        threading.Thread(target=claim, args=("worker-2",), name="fair-worker-2"),
+        threading.Thread(target=claim, name="fair-worker-1"),
+        threading.Thread(target=claim, name="fair-worker-2"),
     ]
     for thread in threads:
         thread.start()
