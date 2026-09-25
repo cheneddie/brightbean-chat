@@ -166,11 +166,27 @@ class ApiKey(WorkspaceScopedModel):
         Over the digests rather than the raw values, so the comparison is over
         fixed-length data whatever the caller sent.
         """
-        from apps.api.keys import digest_for
+        from apps.api.keys import digest_candidates_for, digest_for
 
         if not secret or not self.token_digest:
             return False
-        return secrets.compare_digest(digest_for(secret), self.token_digest)
+        matched = any(
+            secrets.compare_digest(candidate, self.token_digest)
+            for candidate in digest_candidates_for(secret)
+        )
+        if not matched:
+            return False
+
+        current = digest_for(secret)
+        if not secrets.compare_digest(current, self.token_digest):
+            # Successful presentation gives us the one thing a digest-only
+            # credential normally lacks: its plaintext secret. Rehash lazily
+            # so active long-lived API keys migrate off the fallback generation.
+            type(self).objects.unscoped().filter(pk=self.pk, token_digest=self.token_digest).update(
+                token_digest=current
+            )
+            self.token_digest = current
+        return True
 
 
 class OutboundWebhook(WorkspaceScopedModel):
