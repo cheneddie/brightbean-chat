@@ -31,8 +31,9 @@ from django.utils import timezone
 from django.utils.crypto import constant_time_compare
 from django.views.decorators.csrf import csrf_exempt
 
+from apps.queueing.health import HEARTBEAT_KEY, touch_queue_consumer
 from apps.queueing.housekeeping import ZOMBIE_AFTER, ensure_housekeeping_scheduled
-from apps.queueing.models import ActionStatus, ScheduledAction
+from apps.queueing.models import ActionStatus, QueueConsumerHeartbeat, ScheduledAction
 from apps.queueing.worker import drain
 
 logger = logging.getLogger(__name__)
@@ -92,7 +93,9 @@ def internal_tick(request: HttpRequest) -> HttpResponse:
 
     started = time.monotonic()
     ensure_housekeeping_scheduled()
+    touch_queue_consumer("http_tick", force=True)
     result = drain(batch_size=BATCH_SIZE, max_seconds=MAX_SECONDS)
+    touch_queue_consumer("http_tick", force=True)
     duration_ms = int((time.monotonic() - started) * 1000)
 
     logger.info(
@@ -139,8 +142,14 @@ def internal_queue_status(request: HttpRequest) -> HttpResponse:
         updated_at__gte=now - timedelta(hours=24),
     ).count()
     warn_after = max(1, int(getattr(settings, "QUEUE_STATUS_OVERDUE_WARN_SECONDS", 60)))
+    heartbeat_max_age = max(1, int(getattr(settings, "QUEUE_CONSUMER_HEARTBEAT_MAX_AGE_SECONDS", 120)))
+    heartbeat = QueueConsumerHeartbeat.objects.filter(key=HEARTBEAT_KEY).first()
+    heartbeat_age = (
+        max(0, int((now - heartbeat.last_seen_at).total_seconds())) if heartbeat is not None else None
+    )
+    heartbeat_stale = heartbeat_age is None or heartbeat_age > heartbeat_max_age
 
-    if stale_running:
+    if stale_running or heartbeat_stale:
         overall = "error"
         http_status = 503
     elif overdue_seconds >= warn_after or failed_recent:
@@ -153,6 +162,12 @@ def internal_queue_status(request: HttpRequest) -> HttpResponse:
     return JsonResponse(
         {
             "status": overall,
+            "consumer": {
+                "source": heartbeat.source if heartbeat is not None else "",
+                "age_seconds": heartbeat_age,
+                "max_age_seconds": heartbeat_max_age,
+                "stale": heartbeat_stale,
+            },
             "queue": {
                 "due_pending": due.count(),
                 "running": running.count(),
