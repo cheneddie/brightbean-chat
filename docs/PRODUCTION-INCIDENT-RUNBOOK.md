@@ -52,7 +52,7 @@ python manage.py ops_snapshot --json --fail-on-degraded
 |---|---:|---|---|
 | Database health | `/healthz` returns 503 | error | Check Postgres reachability, credentials, saturation, disk and recent deploy/migration. |
 | Queue consumer heartbeat | missing or older than 120s | error | Check `worker` process or tick scheduler. Do not enqueue more work as a “test”. |
-| Stale running queue work | older than zombie threshold (10m) | error | Check worker crashes/timeouts and housekeeping. Preserve the rows for diagnosis. |
+| Stale running queue work | older than `QUEUE_ZOMBIE_AFTER_SECONDS` (600s default) | error | Check worker crashes/timeouts and housekeeping. Preserve the rows for diagnosis. |
 | Webhook stuck in `received` | older than 300s | error | Inspect webhook processor logs/database health. Do not delete the event log to make the count disappear. |
 | Oldest due queue item | 60s+ overdue | degraded | Check worker throughput, provider throttling and backlog growth. |
 | Terminal queue failures | any in previous 24h | degraded | Inspect action type + scrubbed `last_error`; determine transient vs permanent failure. |
@@ -63,6 +63,7 @@ Thresholds are deployment settings:
 
 ```text
 QUEUE_STATUS_OVERDUE_WARN_SECONDS
+QUEUE_ZOMBIE_AFTER_SECONDS
 QUEUE_CONSUMER_HEARTBEAT_MAX_AGE_SECONDS
 OPS_WEBHOOK_STUCK_SECONDS
 OPS_WEBHOOK_FAILURE_WINDOW_SECONDS
