@@ -50,6 +50,7 @@ NODE_CONFIGS: dict[str, dict[str, Any]] = {
     # a UUID so that renaming a tag cannot break every flow and segment that
     # points at it. The vendored fallback this app carried until issue #3 merged
     # guessed a name; these fixtures moved with the real schema.
+    "instagram_follow_gate": {"unknown_policy": "fail_open"},
     "condition": {
         "match": "all",
         "rules": [

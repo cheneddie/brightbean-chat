@@ -66,7 +66,7 @@ function stringForPattern(pattern: string, hint: string): string {
       // real primary keys. A placed condition therefore starts pointing at
       // nothing, and the panel's pick-lists are how it gets filled in.
       return "00000000-0000-0000-0000-000000000000";
-    case "^(?:default|timeout|error|cond:(?:true|false)|(?:btn|qr|rand):[A-Za-z0-9_-]{1,64})$":
+    case "^(?:default|timeout|error|cond:(?:true|false)|follow:(?:following|not_following|unknown)|(?:btn|qr|rand):[A-Za-z0-9_-]{1,64})$":
       return "default";
     case "^[a-z0-9_]{1,512}/[A-Za-z_]{2,10}$":
       // A WhatsApp template reference, `<name>/<language>` (issue #19). Like

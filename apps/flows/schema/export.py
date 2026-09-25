@@ -90,7 +90,7 @@ def json_schema() -> dict[str, Any]:
                 min_length=1,
                 max_length=70,
                 pattern=HANDLE_PATTERN,
-                description="default | btn:<id> | qr:<id> | cond:true | cond:false | rand:<id> | timeout | error",
+                description="default | btn:<id> | qr:<id> | cond:true | cond:false | follow:<status> | rand:<id> | timeout | error",
             ),
             "target": f.string(min_length=1, max_length=64, pattern=ID_PATTERN),
         },

@@ -514,6 +514,26 @@ register_node_type(
 
 register_node_type(
     NodeSpec(
+        type="instagram_follow_gate",
+        label="Check Instagram follow",
+        description="Checks whether this Instagram contact follows the connected professional account.",
+        group="logic",
+        config=f.obj(
+            {
+                "unknown_policy": f.enum(
+                    "fail_open",
+                    "fail_closed",
+                    "ask_again",
+                    description="What to do when Instagram cannot reliably return follow status. Defaults to fail_open.",
+                )
+            }
+        ),
+        handles=("follow:following", "follow:not_following", "follow:unknown"),
+    )
+)
+
+register_node_type(
+    NodeSpec(
         type="condition",
         label="Branch on a condition",
         description="Splits the flow in two, on what you know about the contact.",

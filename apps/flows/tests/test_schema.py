@@ -24,6 +24,7 @@ SPEC_NODE_TYPES = {
     "action",
     "start_flow",
     "condition",
+    "instagram_follow_gate",
     "smart_delay",
     "randomizer",
     "external_request",
@@ -73,7 +74,19 @@ class TestRegistry:
 class TestHandles:
     @pytest.mark.parametrize(
         "raw",
-        ["default", "timeout", "error", "cond:true", "cond:false", "btn:b1", "qr:q_1", "rand:path-a"],
+        [
+            "default",
+            "timeout",
+            "error",
+            "cond:true",
+            "cond:false",
+            "follow:following",
+            "follow:not_following",
+            "follow:unknown",
+            "btn:b1",
+            "qr:q_1",
+            "rand:path-a",
+        ],
     )
     def test_the_grammar_accepts_what_spec_9_1_lists(self, raw):
         assert parse_handle(raw) is not None
@@ -84,6 +97,13 @@ class TestHandles:
     )
     def test_the_grammar_rejects_everything_else(self, raw):
         assert parse_handle(raw) is None
+
+    def test_follow_gate_exposes_three_status_handles(self):
+        assert handles_for_node(NODE_TYPES["instagram_follow_gate"], NODE_CONFIGS["instagram_follow_gate"]) == {
+            "follow:following",
+            "follow:not_following",
+            "follow:unknown",
+        }
 
     def test_dynamic_handles_come_from_the_config(self):
         spec = NODE_TYPES["send_message"]

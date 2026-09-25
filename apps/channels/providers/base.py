@@ -35,6 +35,7 @@ import httpx
 
 from apps.channels.capabilities import Capabilities
 from apps.channels.events import NormalizedEvent, OutboundMessage, SendResult
+from apps.channels.follow import FollowStatus
 from apps.channels.providers.exceptions import APIError, RateLimitError
 
 if TYPE_CHECKING:
@@ -306,6 +307,15 @@ class Adapter(ABC):
         — which is most of them — writes nothing.
         """
         return None
+
+    def check_follow_status(self, connection: "ChannelConnection", identity: Any) -> FollowStatus:
+        """Best-effort follower relationship for this platform.
+
+        UNKNOWN is the safe default: most platforms do not expose this
+        relationship, and lack of support is not evidence that a person does
+        not follow the business.
+        """
+        return FollowStatus.UNKNOWN
 
     # -- outbound -----------------------------------------------------------
 

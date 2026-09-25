@@ -89,6 +89,7 @@ from apps.channels.events import (
     SendStatus,
     TextBlock,
 )
+from apps.channels.follow import FollowStatus
 from apps.channels.instagram_oauth import access_token, mark_needs_reauth
 from apps.channels.models import ChannelConnection
 from apps.channels.providers import meta_common
@@ -796,6 +797,41 @@ class InstagramAdapter(Adapter):
                 continue
             events.extend(_entry_events(owner, entry))
         return events
+
+    def check_follow_status(self, connection: ChannelConnection, identity: Any) -> FollowStatus:
+        """Read Meta's is_user_follow_business field for one messaging IGSID.
+
+        Meta's User Profile API requires messaging consent. A public comment
+        by itself does not establish that consent, so any rejection or missing
+        field is UNKNOWN rather than NOT_FOLLOWING.
+        """
+        recipient_id = _platform_id(getattr(identity, "platform_user_id", "") or "")
+        if not recipient_id:
+            return FollowStatus.UNKNOWN
+        try:
+            data = call(
+                access_token(connection),
+                recipient_id,
+                method="GET",
+                params={"fields": "is_user_follow_business"},
+            )
+        except APIError as exc:
+            if exc.code in AUTH_ERROR_CODES:
+                mark_needs_reauth(connection)
+            logger.info(
+                "Instagram follow status unavailable on connection %s (status=%s, code=%s).",
+                connection.pk,
+                exc.status_code,
+                exc.code or "-",
+            )
+            return FollowStatus.UNKNOWN
+
+        value = data.get("is_user_follow_business")
+        if value is True:
+            return FollowStatus.FOLLOWING
+        if value is False:
+            return FollowStatus.NOT_FOLLOWING
+        return FollowStatus.UNKNOWN
 
     # -- outbound -----------------------------------------------------------
 

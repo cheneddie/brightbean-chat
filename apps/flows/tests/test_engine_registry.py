@@ -97,6 +97,9 @@ class TestSynchronousSafety:
         safe = {node_type for node_type in registered_node_types() if synchronous_safe(node_type)}
         assert safe == EXPECTED_SYNCHRONOUS_SAFE
 
+    def test_follow_gate_is_never_inline_safe(self):
+        assert synchronous_safe("instagram_follow_gate") is False
+
     def test_a_type_with_no_runtime_is_never_inline_safe(self):
         """Something that cannot run at all cannot run inside a 1.5-second budget."""
         for node_type in types_without_runtime():
