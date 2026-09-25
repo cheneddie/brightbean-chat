@@ -169,6 +169,7 @@ class ScheduledAction(WorkspaceScopedModel):
         """True for deployment-level work that belongs to no tenant."""
         return self.workspace_id is None
 
+
 class QueueConsumerHeartbeat(models.Model):
     """Deployment-level proof that some queue consumer is alive.
 
