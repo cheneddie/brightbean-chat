@@ -237,6 +237,21 @@ class TestResendAndRevoke:
             invited_by=tenancy.owner,
         )
 
+    def test_pre_rotation_invitation_remains_resolvable_through_fallback(self, tenancy, settings):
+        invitation = self._invite(tenancy)
+        token = invitation.raw_token
+        old_secret = settings.SECRET_KEY
+        old_salt = settings.ENCRYPTION_KEY_SALT
+
+        settings.SECRET_KEY = "new-invite-secret-for-rotation-tests"
+        settings.ENCRYPTION_KEY_SALT = b"new-invite-salt-for-rotation-tests"
+        settings.ENCRYPTION_KEY_FALLBACKS = [
+            {"secret_key": old_secret, "salt": old_salt.decode("utf-8")}
+        ]
+
+        assert token is not None
+        assert Invitation.objects.for_token(token).get() == invitation
+
     def test_resend_rotates_the_token(self, tenancy):
         """Rotation is what makes resend the repair for a leaked or stale link."""
         invitation = self._invite(tenancy)
