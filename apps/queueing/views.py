@@ -145,9 +145,7 @@ def internal_queue_status(request: HttpRequest) -> HttpResponse:
     warn_after = max(1, int(getattr(settings, "QUEUE_STATUS_OVERDUE_WARN_SECONDS", 60)))
     heartbeat_max_age = max(1, int(getattr(settings, "QUEUE_CONSUMER_HEARTBEAT_MAX_AGE_SECONDS", 120)))
     heartbeat = QueueConsumerHeartbeat.objects.filter(key=HEARTBEAT_KEY).first()
-    heartbeat_age = (
-        max(0, int((now - heartbeat.last_seen_at).total_seconds())) if heartbeat is not None else None
-    )
+    heartbeat_age = max(0, int((now - heartbeat.last_seen_at).total_seconds())) if heartbeat is not None else None
     heartbeat_stale = heartbeat_age is None or heartbeat_age > heartbeat_max_age
 
     if stale_running or heartbeat_stale:
