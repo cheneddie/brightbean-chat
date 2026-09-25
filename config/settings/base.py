@@ -109,6 +109,32 @@ else:
 # Encryption key derivation salt — consumed by apps.common.encryption.
 ENCRYPTION_KEY_SALT = _ENCRYPTION_KEY_SALT.encode("utf-8")
 
+# Previous (SECRET_KEY, ENCRYPTION_KEY_SALT) pairs kept temporarily during a
+# credential-encryption rotation. JSON shape:
+# [{"secret_key":"old-secret","salt":"old-salt"}]
+#
+# The pairing matters: a salt from generation N with a secret from generation
+# N-1 derives a third key that never encrypted anything. apps.common.encryption
+# tries these only for reads / lookup verification; every new write uses the
+# primary pair above.
+ENCRYPTION_KEY_FALLBACKS = env.json("ENCRYPTION_KEY_FALLBACKS", default=[])
+if not isinstance(ENCRYPTION_KEY_FALLBACKS, list):
+    raise ImproperlyConfigured("ENCRYPTION_KEY_FALLBACKS must be a JSON list.")
+for _index, _fallback in enumerate(ENCRYPTION_KEY_FALLBACKS):
+    if not isinstance(_fallback, dict):
+        raise ImproperlyConfigured(f"ENCRYPTION_KEY_FALLBACKS[{_index}] must be an object.")
+    if not str(_fallback.get("secret_key", "")).strip() or not str(_fallback.get("salt", "")).strip():
+        raise ImproperlyConfigured(
+            f"ENCRYPTION_KEY_FALLBACKS[{_index}] needs non-empty secret_key and salt values."
+        )
+
+# Django's signer already supports key fallbacks. Feed it the secret half of
+# the same paired keyring so existing unsubscribe/click/OAuth-state tokens can
+# survive a SECRET_KEY rotation while encrypted fields use the full pair.
+SECRET_KEY_FALLBACKS = list(
+    dict.fromkeys(str(item["secret_key"]) for item in ENCRYPTION_KEY_FALLBACKS if str(item["secret_key"]) != SECRET_KEY)
+)
+
 # Application definition
 
 DJANGO_APPS = [
