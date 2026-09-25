@@ -678,6 +678,7 @@ deployment actually decides:
 |---|---|
 | `SECRET_KEY` | Django's signing key, and the input to credential encryption. The app refuses to boot without it outside `DEBUG`. |
 | `ENCRYPTION_KEY_SALT` | HKDF salt for the AES-256-GCM encrypted fields. A *different* random value. |
+| `ENCRYPTION_KEY_FALLBACKS` | Temporary JSON list of previous `{secret_key, salt}` pairs during a planned key rotation. Reads/verification may use them; new writes never do. |
 | `ALLOWED_HOSTS` | Hostnames this deployment answers on. Anything else gets a 400. Derived from `APP_DOMAIN` in the compose stack. |
 | `APP_URL` | The public origin, with scheme. Unsubscribe, click-tracking and media links are built from it. |
 | `DATABASE_URL` | Postgres connection string. |
@@ -754,6 +755,80 @@ next to the dump. Kept apart, a stolen dump is inert and stolen keys are
 useless; kept together they are one compromise. Kept nowhere, a restored dump is
 a database full of credentials nobody can read — and the recovery for that is
 re-connecting every channel by hand.
+
+### Rotating encryption keys
+
+There are two different rotations. Do not treat them as the same operation.
+
+#### Planned at-rest rotation: prefer changing the salt first
+
+For routine key hygiene, keep `SECRET_KEY` unchanged and rotate
+`ENCRYPTION_KEY_SALT`. This changes the AES-GCM key and every keyed lookup
+digest without invalidating Django-signed unsubscribe/click/OAuth-state tokens.
+
+1. Take a fresh database backup and verify where the current `SECRET_KEY` and
+   `ENCRYPTION_KEY_SALT` are stored.
+2. Generate a new `ENCRYPTION_KEY_SALT`.
+3. Set the new salt as primary and put the previous pair in one-line JSON:
+
+   ```text
+   SECRET_KEY=<same current secret>
+   ENCRYPTION_KEY_SALT=<new salt>
+   ENCRYPTION_KEY_FALLBACKS=[{"secret_key":"<same current secret>","salt":"<old salt>"}]
+   ```
+
+4. Restart both web and worker together. A mixed generation is safe for reads,
+   but every process should agree on which generation is primary.
+5. Check the migration plan without writing:
+
+   ```bash
+   python manage.py rotate_encrypted_data --dry-run
+   ```
+
+6. Rewrite recoverable encrypted fields under the primary generation:
+
+   ```bash
+   python manage.py rotate_encrypted_data
+   ```
+
+   This re-encrypts every `EncryptedTextField` / `EncryptedJSONField` and
+   recomputes `ChannelConnection.webhook_secret_digest` from its recoverable
+   encrypted plaintext.
+7. Exercise channel webhooks and API auth. API keys presented successfully
+   during this window lazy-rehash their digest onto the primary generation.
+8. Do **not** remove the fallback merely because the command completed.
+   Digest-only values cannot all be migrated offline:
+   - active API keys need to be used once under fallback or explicitly rotated;
+   - live invitation links need to be resent or allowed to expire;
+   - live flow preview handles lazy-rehash when claimed and otherwise expire
+     after their short TTL.
+9. Once those old-generation opaque credentials are gone, remove
+   `ENCRYPTION_KEY_FALLBACKS`, restart, and verify stored credentials plus
+   webhook/API/invitation flows again.
+
+#### Rotating `SECRET_KEY` too
+
+Changing `SECRET_KEY` also changes Django signatures. The application derives
+`SECRET_KEY_FALLBACKS` automatically from the `secret_key` values in
+`ENCRYPTION_KEY_FALLBACKS`, so a **planned** full rotation can temporarily keep
+old signed tokens valid.
+
+That continuity has a cost: some public links, especially unsubscribe links,
+may be intentionally long-lived. Keeping an old signing key forever is not a
+completed rotation. Decide which of these two outcomes you want:
+
+- preserve old signed links for a migration window, then remove the fallback
+  and accept that older links stop verifying; or
+- rotate only `ENCRYPTION_KEY_SALT` for periodic at-rest key hygiene and leave
+  `SECRET_KEY` stable.
+
+#### Compromised key: do not preserve the attacker's key as fallback
+
+If either old key material is known or suspected to be compromised, continuity
+is secondary. Replace the primary values, re-encrypt recoverable data, rotate
+or revoke API keys/channel secrets as appropriate, and invalidate old signed
+links. Do **not** keep a compromised pair in `ENCRYPTION_KEY_FALLBACKS` merely
+to avoid user-visible breakage.
 
 ### Uploaded media
 
