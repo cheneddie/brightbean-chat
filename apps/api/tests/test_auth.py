@@ -92,6 +92,32 @@ class TestBearerResolution:
         # And it resolved to *my* workspace, not the colliding one.
         assert response.json()["data"] == []
 
+    def test_pre_rotation_api_key_authenticates_and_lazy_rehashes(self, client, tenancy, settings):
+        key, plaintext = make_key(tenancy.workspace)
+        old_digest = key.token_digest
+        old_secret = settings.SECRET_KEY
+        old_salt = settings.ENCRYPTION_KEY_SALT
+
+        settings.SECRET_KEY = "new-api-key-secret-for-rotation-tests"
+        settings.ENCRYPTION_KEY_SALT = b"new-api-key-salt-for-rotation-tests"
+        settings.ENCRYPTION_KEY_FALLBACKS = [
+            {"secret_key": old_secret, "salt": old_salt.decode("utf-8")}
+        ]
+
+        assert client.get(CONTACTS, **bearer(plaintext)).status_code == 200
+        key.refresh_from_db()
+
+        from apps.api import keys as key_tokens
+
+        parsed = key_tokens.parse(plaintext)
+        assert parsed is not None
+        secret, _lookup = parsed
+        assert key.token_digest == key_tokens.digest_for(secret)
+        assert key.token_digest != old_digest
+
+        settings.ENCRYPTION_KEY_FALLBACKS = []
+        assert client.get(CONTACTS, **bearer(plaintext)).status_code == 200
+
     def test_a_bearer_over_plain_http_is_refused(self, client, tenancy, api_key):
         """SECURITY-BASELINE §5: a plaintext bearer has already leaked.
 
