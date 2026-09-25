@@ -174,9 +174,7 @@ class TestDrain:
 
 @pytest.mark.django_db
 class TestQueueStatus:
-    def test_missing_consumer_heartbeat_is_a_hard_error(
-        self, client: Client, status_url: str, settings: Any
-    ) -> None:
+    def test_missing_consumer_heartbeat_is_a_hard_error(self, client: Client, status_url: str, settings: Any) -> None:
         settings.TICK_TOKEN = TOKEN
         response = client.get(f"{status_url}?token={TOKEN}")
 
@@ -187,9 +185,7 @@ class TestQueueStatus:
         assert body["consumer"]["age_seconds"] is None
         assert body["consumer"]["stale"] is True
 
-    def test_stale_consumer_heartbeat_is_a_hard_error(
-        self, client: Client, status_url: str, settings: Any
-    ) -> None:
+    def test_stale_consumer_heartbeat_is_a_hard_error(self, client: Client, status_url: str, settings: Any) -> None:
         settings.TICK_TOKEN = TOKEN
         settings.QUEUE_CONSUMER_HEARTBEAT_MAX_AGE_SECONDS = 120
         touch_queue_consumer("worker", force=True)
