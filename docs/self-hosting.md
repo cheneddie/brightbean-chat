@@ -955,6 +955,7 @@ job and CI enforces the automatable ones. These are yours:
       process do queue work.
 - [ ] **Watch `/healthz`** with something that will tell you. It fails closed on
       a database problem, which is the failure you want to hear about first.
+- [ ] **Run or schedule `ops_snapshot`.** `make prod-ops ARGS="--json --fail-on-error"` gives a vendor-neutral deployment check for queue consumers, backlog, webhook processing and channel re-auth. See [`PRODUCTION-INCIDENT-RUNBOOK.md`](PRODUCTION-INCIDENT-RUNBOOK.md).
 - [ ] **If `TICK_TOKEN` is configured, also watch `/internal/queue-status`.**
       Alert on HTTP 503 immediately; treat `status=degraded` as an operator
       warning and investigate aged backlog or recent terminal failures.
