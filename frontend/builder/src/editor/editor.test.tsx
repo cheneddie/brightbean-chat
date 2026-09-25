@@ -177,6 +177,16 @@ describe("adding a step", () => {
     expect(screen.getByText("Then send")).toBeInTheDocument();
   });
 
+  it("offers first-class Instagram follow and human handoff steps", () => {
+    renderWith(makeStore(oneStep()), <AddStep />);
+
+    fireEvent.click(screen.getByRole("button", { name: /add a step/i }));
+    const menu = screen.getByRole("menu");
+
+    expect(within(menu).getByRole("menuitem", { name: /check instagram follow/i })).toBeInTheDocument();
+    expect(within(menu).getByRole("menuitem", { name: /hand off to a person/i })).toBeInTheDocument();
+  });
+
   it("places the new step clear of the others and selects it", () => {
     // Clicking used to drop the node at the centre of the pane, usually on top
     // of one already there, and leave it unselected.

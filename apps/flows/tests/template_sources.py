@@ -266,59 +266,106 @@ _FOLLOW_TO_UNLOCK = TemplateSource(
     folder="Grow",
     nodes=[
         _node(
-            "ask",
+            "opening",
             "send_message",
             {
                 "blocks": [
                     {
                         "type": "text",
                         "text": (
-                            "Hey {{first_name}}! Happy to send this over, and it goes out to followers first. "
-                            "Give the account a follow and tap below."
+                            "Hey {{first_name}}! I can send this to followers. "
+                            "Follow the account, then tap below and I will check."
                         ),
                     }
                 ],
                 "quick_replies": [
-                    {"id": "followed", "label": "Done, I followed"},
+                    {"id": "check", "label": "Check my follow"},
                     {"id": "later", "label": "Maybe later"},
                 ],
             },
             x=0,
         ),
         _node(
+            "follow_check",
+            "instagram_follow_gate",
+            {"unknown_policy": "ask_again"},
+            x=300,
+        ),
+        _node(
             "deliver",
             "send_message",
             {
                 "blocks": [
-                    {"type": "text", "text": "Amazing, here it is. Enjoy!"},
+                    {"type": "text", "text": "You are in. Here it is — enjoy!"},
                     _card("The thing you asked for", "Yours to keep.", "Open it", "https://example.com/unlock"),
                 ]
             },
-            x=300,
+            x=600,
         ),
-        _node("tag_follower", "action", {"actions": [{"verb": "add_tag", "tag": "Follow unlock"}]}, x=600),
+        _node("tag_follower", "action", {"actions": [{"verb": "add_tag", "tag": "Follow unlock"}]}, x=900),
+        _node(
+            "follow_prompt",
+            "send_message",
+            {
+                "blocks": [
+                    {
+                        "type": "text",
+                        "text": "I cannot see the follow yet. Follow the account, then tap Check again.",
+                    }
+                ],
+                "quick_replies": [
+                    {"id": "check_again", "label": "Check again"},
+                    {"id": "later", "label": "Maybe later"},
+                ],
+            },
+            x=600,
+        ),
+        _node(
+            "unknown",
+            "send_message",
+            {
+                "blocks": [
+                    {
+                        "type": "text",
+                        "text": "Instagram did not return a reliable follow status just now. Tap Try again in a moment.",
+                    }
+                ],
+                "quick_replies": [
+                    {"id": "check_again", "label": "Try again"},
+                    {"id": "later", "label": "Maybe later"},
+                ],
+            },
+            x=600,
+        ),
         _node(
             "later",
             "send_message",
-            _text("No problem. The link stays here whenever you want it."),
-            x=300,
+            _text("No problem. Come back to this DM whenever you are ready."),
+            x=900,
         ),
         _note(
-            "why_honour_system",
-            "This asks people to confirm the follow rather than checking it. Instagram with Instagram "
-            "Login publishes no follow webhook, so nothing can verify it \u2014 there is no 'is a follower' "
-            "condition to branch on. The tag is what you segment on later.\n\n" + _REPLACE,
-            900,
+            "how_it_works",
+            "The first DM waits for a tap before checking follow status. That interaction opens the normal DM "
+            "window, so protected content is not sent as a second message from the one-time comment private reply. "
+            "FOLLOWING unlocks the content, NOT_FOLLOWING asks them to follow and retry, and UNKNOWN asks again "
+            "instead of pretending they are not following.\n\n" + _REPLACE,
+            1200,
         ),
     ],
     edges=[
-        _edge("ask", "qr:followed", "deliver"),
-        _edge("ask", "qr:later", "later"),
+        _edge("opening", "qr:check", "follow_check"),
+        _edge("opening", "qr:later", "later"),
+        _edge("follow_check", "follow:following", "deliver"),
+        _edge("follow_check", "follow:not_following", "follow_prompt"),
+        _edge("follow_check", "follow:unknown", "unknown"),
         _edge("deliver", "default", "tag_follower"),
+        _edge("follow_prompt", "qr:check_again", "follow_check"),
+        _edge("follow_prompt", "qr:later", "later"),
+        _edge("unknown", "qr:check_again", "follow_check"),
+        _edge("unknown", "qr:later", "later"),
     ],
-    triggers=[_comment("unlock", "want it", "send it", replies=("Check your DMs!", "Just sent it over."))],
+    triggers=[_comment("unlock", "want it", "send it", replies=("Check your DMs!", "Just sent it over."), like=False)],
 )
-
 
 _LINK_IN_DM = TemplateSource(
     filename="instagram-comment-link-in-dm.json",

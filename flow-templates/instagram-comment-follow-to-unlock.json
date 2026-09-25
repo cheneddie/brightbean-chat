@@ -7,22 +7,64 @@
       "graph": {
         "edges": [
           {
-            "id": "ask-qr-followed-deliver",
-            "source": "ask",
-            "sourceHandle": "qr:followed",
+            "id": "opening-qr-check-follow_check",
+            "source": "opening",
+            "sourceHandle": "qr:check",
+            "target": "follow_check"
+          },
+          {
+            "id": "opening-qr-later-later",
+            "source": "opening",
+            "sourceHandle": "qr:later",
+            "target": "later"
+          },
+          {
+            "id": "follow_check-follow-following-deliver",
+            "source": "follow_check",
+            "sourceHandle": "follow:following",
             "target": "deliver"
           },
           {
-            "id": "ask-qr-later-later",
-            "source": "ask",
-            "sourceHandle": "qr:later",
-            "target": "later"
+            "id": "follow_check-follow-not_following-follow_prompt",
+            "source": "follow_check",
+            "sourceHandle": "follow:not_following",
+            "target": "follow_prompt"
+          },
+          {
+            "id": "follow_check-follow-unknown-unknown",
+            "source": "follow_check",
+            "sourceHandle": "follow:unknown",
+            "target": "unknown"
           },
           {
             "id": "deliver-default-tag_follower",
             "source": "deliver",
             "sourceHandle": "default",
             "target": "tag_follower"
+          },
+          {
+            "id": "follow_prompt-qr-check_again-follow_check",
+            "source": "follow_prompt",
+            "sourceHandle": "qr:check_again",
+            "target": "follow_check"
+          },
+          {
+            "id": "follow_prompt-qr-later-later",
+            "source": "follow_prompt",
+            "sourceHandle": "qr:later",
+            "target": "later"
+          },
+          {
+            "id": "unknown-qr-check_again-follow_check",
+            "source": "unknown",
+            "sourceHandle": "qr:check_again",
+            "target": "follow_check"
+          },
+          {
+            "id": "unknown-qr-later-later",
+            "source": "unknown",
+            "sourceHandle": "qr:later",
+            "target": "later"
           }
         ],
         "nodes": [
@@ -30,14 +72,14 @@
             "config": {
               "blocks": [
                 {
-                  "text": "Hey {{first_name}}! Happy to send this over, and it goes out to followers first. Give the account a follow and tap below.",
+                  "text": "Hey {{first_name}}! I can send this to followers. Follow the account, then tap below and I will check.",
                   "type": "text"
                 }
               ],
               "quick_replies": [
                 {
-                  "id": "followed",
-                  "label": "Done, I followed"
+                  "id": "check",
+                  "label": "Check my follow"
                 },
                 {
                   "id": "later",
@@ -45,7 +87,7 @@
                 }
               ]
             },
-            "id": "ask",
+            "id": "opening",
             "position": {
               "x": 0,
               "y": 0
@@ -54,9 +96,20 @@
           },
           {
             "config": {
+              "unknown_policy": "ask_again"
+            },
+            "id": "follow_check",
+            "position": {
+              "x": 300,
+              "y": 0
+            },
+            "type": "instagram_follow_gate"
+          },
+          {
+            "config": {
               "blocks": [
                 {
-                  "text": "Amazing, here it is. Enjoy!",
+                  "text": "You are in. Here it is — enjoy!",
                   "type": "text"
                 },
                 {
@@ -72,7 +125,7 @@
             },
             "id": "deliver",
             "position": {
-              "x": 300,
+              "x": 600,
               "y": 0
             },
             "type": "send_message"
@@ -88,7 +141,7 @@
             },
             "id": "tag_follower",
             "position": {
-              "x": 600,
+              "x": 900,
               "y": 0
             },
             "type": "action"
@@ -97,25 +150,77 @@
             "config": {
               "blocks": [
                 {
-                  "text": "No problem. The link stays here whenever you want it.",
+                  "text": "I cannot see the follow yet. Follow the account, then tap Check again.",
                   "type": "text"
+                }
+              ],
+              "quick_replies": [
+                {
+                  "id": "check_again",
+                  "label": "Check again"
+                },
+                {
+                  "id": "later",
+                  "label": "Maybe later"
                 }
               ]
             },
-            "id": "later",
+            "id": "follow_prompt",
             "position": {
-              "x": 300,
+              "x": 600,
               "y": 0
             },
             "type": "send_message"
           },
           {
             "config": {
-              "text": "This asks people to confirm the follow rather than checking it. Instagram with Instagram Login publishes no follow webhook, so nothing can verify it — there is no 'is a follower' condition to branch on. The tag is what you segment on later.\n\nBefore you publish: swap every example.com link for your own, rename the tags to match yours, and rewrite the copy in your voice."
+              "blocks": [
+                {
+                  "text": "Instagram did not return a reliable follow status just now. Tap Try again in a moment.",
+                  "type": "text"
+                }
+              ],
+              "quick_replies": [
+                {
+                  "id": "check_again",
+                  "label": "Try again"
+                },
+                {
+                  "id": "later",
+                  "label": "Maybe later"
+                }
+              ]
             },
-            "id": "why_honour_system",
+            "id": "unknown",
+            "position": {
+              "x": 600,
+              "y": 0
+            },
+            "type": "send_message"
+          },
+          {
+            "config": {
+              "blocks": [
+                {
+                  "text": "No problem. Come back to this DM whenever you are ready.",
+                  "type": "text"
+                }
+              ]
+            },
+            "id": "later",
             "position": {
               "x": 900,
+              "y": 0
+            },
+            "type": "send_message"
+          },
+          {
+            "config": {
+              "text": "The first DM waits for a tap before checking follow status. That interaction opens the normal DM window, so protected content is not sent as a second message from the one-time comment private reply. FOLLOWING unlocks the content, NOT_FOLLOWING asks them to follow and retry, and UNKNOWN asks again instead of pretending they are not following.\n\nBefore you publish: swap every example.com link for your own, rename the tags to match yours, and rewrite the copy in your voice."
+            },
+            "id": "how_it_works",
+            "position": {
+              "x": 1200,
               "y": 0
             },
             "type": "note"
@@ -133,7 +238,7 @@
               "want it",
               "send it"
             ],
-            "like_comment": true,
+            "like_comment": false,
             "once_per_contact_per_post": true,
             "post_scope": "all",
             "public_reply": {

@@ -58,6 +58,7 @@ export const OVERRIDES: Record<string, Widget> = {
   "send_message:quick_replies": ButtonList,
   "randomizer:paths": WeightEditor,
   "start_flow:flow_id": FlowSelect,
+  "human_handoff:member": MemberSelect,
   "external_request:body": JsonField,
   "data_collection:target.key": FieldSelect,
   // SPEC §6.7 asks for a rich text editor rather than a plain box. It is still
