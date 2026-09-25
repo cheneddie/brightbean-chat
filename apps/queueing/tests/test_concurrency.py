@@ -197,3 +197,54 @@ def test_concurrent_enqueue_cannot_overrun_workspace_admission_limit() -> None:
         .count()
         == 25
     )
+
+@pytest.mark.django_db(transaction=True)
+def test_fair_claiming_remains_disjoint_across_concurrent_workers() -> None:
+    noisy = create_tenancy("fair-noisy")
+    quiet = create_tenancy("fair-quiet")
+    noisy_due = timezone.now() - timedelta(minutes=2)
+    quiet_due = timezone.now() - timedelta(minutes=1)
+
+    ScheduledAction.objects.bulk_create(
+        ScheduledAction(workspace=noisy.workspace, run_at=noisy_due, type=PROBE, payload={"n": n})
+        for n in range(1_000)
+    )
+    ScheduledAction.objects.bulk_create(
+        ScheduledAction(workspace=quiet.workspace, run_at=quiet_due, type=PROBE, payload={"n": n})
+        for n in range(20)
+    )
+
+    barrier = threading.Barrier(2)
+    guard = threading.Lock()
+    claimed: list[tuple[Any, Any]] = []
+    failures: list[BaseException] = []
+
+    def claim(name: str) -> None:
+        try:
+            connections.close_all()
+            barrier.wait(timeout=10)
+            rows = claim_batch(50)
+            with guard:
+                claimed.extend((row.pk, row.workspace_id) for row in rows)
+        except BaseException as exc:  # pragma: no cover - surfaced below
+            with guard:
+                failures.append(exc)
+        finally:
+            connections.close_all()
+
+    threads = [
+        threading.Thread(target=claim, args=("worker-1",), name="fair-worker-1"),
+        threading.Thread(target=claim, args=("worker-2",), name="fair-worker-2"),
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=30)
+        assert not thread.is_alive(), f"{thread.name} did not finish"
+
+    assert failures == []
+    assert len(claimed) == 100
+    assert len({pk for pk, _workspace_id in claimed}) == 100
+    assert sum(1 for _pk, workspace_id in claimed if workspace_id == quiet.workspace.pk) == 20
+    assert sum(1 for _pk, workspace_id in claimed if workspace_id == noisy.workspace.pk) == 80
+
