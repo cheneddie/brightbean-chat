@@ -1,6 +1,6 @@
-from django.db import migrations, models
 import apps.common.uuid7
 import django.utils.timezone
+from django.db import migrations, models
 
 
 class Migration(migrations.Migration):
