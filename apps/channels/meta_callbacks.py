@@ -21,6 +21,7 @@ from django.db import IntegrityError, transaction
 from apps.channels.models import ChannelConnection, MetaDataDeletionReceipt
 from apps.common.encryption import hmac_digest
 from apps.common.platforms import Platform
+from apps.credentials.models import PlatformCredential, derive_is_configured
 from apps.credentials.resolution import SOURCE_ENV, resolve_platform_credentials
 
 logger = logging.getLogger(__name__)
@@ -35,6 +36,29 @@ def deployment_instagram_app_secret() -> str:
     if resolution.source != SOURCE_ENV:
         return ""
     value = resolution.credentials.get("client_secret") or resolution.credentials.get("app_secret")
+    return value if isinstance(value, str) and value else ""
+
+
+def organization_instagram_app_secret(organization_id: Any) -> str:
+    """Return exactly one organization's Instagram app secret, never a fallback.
+
+    Organization-scoped lifecycle callback URLs carry the organization context
+    precisely so signature verification can select one secret before trusting
+    the signed payload. Using the normal env -> organization resolution chain
+    here would be wrong: a configured deployment app would shadow the BYO app
+    whose callback URL Meta actually invoked.
+    """
+    row = (
+        PlatformCredential.objects.for_org(organization_id)
+        .filter(platform=Platform.INSTAGRAM.value)
+        .first()
+    )
+    if row is None:
+        return ""
+    credentials = dict(row.credentials or {})  # type: ignore[arg-type]
+    if not derive_is_configured(Platform.INSTAGRAM.value, credentials):
+        return ""
+    value = credentials.get("client_secret") or credentials.get("app_secret")
     return value if isinstance(value, str) and value else ""
 
 
@@ -80,24 +104,28 @@ def parse_signed_request(signed_request: str, *, app_secret: str) -> dict[str, A
     return {**payload, "user_id": user_text}
 
 
-def delete_connected_instagram_account(user_id: str) -> int:
-    """Delete every Instagram connection belonging to this Meta lifecycle user.
+def delete_connected_instagram_account(user_id: str, *, organization_id: Any = None) -> int:
+    """Delete Instagram connections belonging to one Meta lifecycle identity.
 
-    ``signed_request.user_id`` is an app-scoped lifecycle identity, not a
-    routing key. It must never be compared with ``external_id``: that column
-    names the Instagram professional account used by webhook routing and the
-    two identities are not contractually interchangeable.
+    ``signed_request.user_id`` is app-scoped, not a routing key. Generic
+    deployment callbacks operate inside one deployment Meta App namespace and
+    therefore may remove every matching connection across organizations.
 
-    A single Meta user may have authorised more than one professional account,
-    so all matching connections are removed. Existing foreign-key cascades
-    remove each connection's conversations, trigger bindings and channel
-    identities. CRM Contact rows are not globally erased: those are third
-    parties who messaged the connected businesses.
+    BYO Meta Apps are a different namespace per organization. Their callback
+    passes ``organization_id``, which is a mandatory deletion boundary: an
+    app-scoped id from organization A must never delete a numerically identical
+    id that organization B received from a different Meta App.
+
+    Existing foreign-key cascades remove each connection's conversations,
+    trigger bindings and channel identities. CRM Contact rows are not globally
+    erased: those are third parties who messaged the connected businesses.
     """
     connections = ChannelConnection.objects.unscoped().filter(
         platform=Platform.INSTAGRAM.value,
         meta_app_scoped_user_id=user_id,
     )
+    if organization_id is not None:
+        connections = connections.filter(workspace__organization_id=organization_id)
     count = connections.count()
     if count:
         connections.delete()
