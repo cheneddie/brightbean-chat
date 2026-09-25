@@ -143,6 +143,15 @@ class ChannelConnection(WorkspaceScopedModel):
         max_length=200,
         help_text="Page id, IG user id, WABA phone number id, bot id, Twilio number or sending domain.",
     )
+    meta_app_scoped_user_id = models.CharField(
+        max_length=200,
+        blank=True,
+        default="",
+        help_text=(
+            "Meta lifecycle identity from OAuth code exchange. Instagram deauthorize/data-deletion "
+            "callbacks resolve by this value, never by external_id."
+        ),
+    )
     credentials = EncryptedJSONField(
         default=dict,
         blank=True,
@@ -187,7 +196,13 @@ class ChannelConnection(WorkspaceScopedModel):
                 name="channelconnection_unique_webhook_digest",
             ),
         ]
-        indexes = [models.Index(fields=["workspace", "platform"], name="channelconn_ws_platform_idx")]
+        indexes = [
+            models.Index(fields=["workspace", "platform"], name="channelconn_ws_platform_idx"),
+            models.Index(
+                fields=["platform", "meta_app_scoped_user_id"],
+                name="channelconn_meta_user_idx",
+            ),
+        ]
 
     def __str__(self) -> str:
         return f"{self.get_platform_display()} · {self.display_name}"
