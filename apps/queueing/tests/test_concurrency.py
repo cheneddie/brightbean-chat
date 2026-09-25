@@ -20,10 +20,12 @@ from typing import Any
 
 import pytest
 from django.db import connections
+from django.test import override_settings
 from django.utils import timezone
 
 from apps.queueing.housekeeping import ZOMBIE_AFTER, reset_zombie_actions
 from apps.queueing.models import ActionStatus, ScheduledAction
+from apps.queueing.registry import QueueAdmissionLimitError, schedule
 from apps.queueing.tests.support import temporary_handler
 from apps.queueing.worker import claim_batch, drain
 from tests.support import create_tenancy
@@ -139,3 +141,59 @@ class TestExactlyOnce:
         recovered = ScheduledAction.objects.unscoped().filter(id__in=killed).first()
         assert recovered is not None
         assert recovered.attempts == 2
+
+@pytest.mark.django_db(transaction=True)
+@override_settings(QUEUE_MAX_ACTIVE_PER_WORKSPACE=25)
+def test_concurrent_enqueue_cannot_overrun_workspace_admission_limit() -> None:
+    """The count+insert admission decision is atomic per workspace.
+
+    Four independent database connections race to enqueue 100 distinct actions.
+    Exactly 25 may enter; without the workspace advisory lock several threads
+    can observe the same final free slot and overshoot the configured cap.
+    """
+    tenancy = create_tenancy("admission")
+    due = timezone.now() - timedelta(seconds=1)
+    barrier = threading.Barrier(4)
+    guard = threading.Lock()
+    accepted: list[Any] = []
+    failures: list[BaseException] = []
+
+    def enqueue(worker: int) -> None:
+        try:
+            connections.close_all()
+            barrier.wait(timeout=10)
+            for index in range(25):
+                try:
+                    action = schedule(
+                        "admission_probe",
+                        due,
+                        {"worker": worker, "index": index},
+                        workspace=tenancy.workspace,
+                    )
+                except QueueAdmissionLimitError:
+                    continue
+                with guard:
+                    accepted.append(action.pk)
+        except BaseException as exc:  # pragma: no cover - surfaced below
+            with guard:
+                failures.append(exc)
+        finally:
+            connections.close_all()
+
+    threads = [threading.Thread(target=enqueue, args=(worker,), name=f"enqueue-{worker}") for worker in range(4)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=30)
+        assert not thread.is_alive(), f"{thread.name} did not finish"
+
+    assert failures == []
+    assert len(accepted) == 25
+    assert len(set(accepted)) == 25
+    assert (
+        ScheduledAction.objects.for_workspace(tenancy.workspace)
+        .filter(status__in=(ActionStatus.PENDING, ActionStatus.RUNNING))
+        .count()
+        == 25
+    )
+
