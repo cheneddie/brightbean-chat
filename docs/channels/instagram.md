@@ -65,10 +65,26 @@ Three things, and the third is the one that takes weeks rather than minutes.
 
    **Credential boundary:** these generic lifecycle URLs require a complete
    deployment-level `PLATFORM_INSTAGRAM_CLIENT_ID` +
-   `PLATFORM_INSTAGRAM_CLIENT_SECRET`. If this installation instead gives
-   different organizations different Meta Apps, do not point all of those apps
-   at the generic URL: the callback arrives before a workspace is known, so it
-   cannot safely guess which stored app secret should verify the request.
+   `PLATFORM_INSTAGRAM_CLIENT_SECRET`.
+
+   If an organization brings its own Meta App from the Django admin, register
+   that app with organization-scoped lifecycle URLs instead:
+
+   ```text
+   Deauthorize callback URL:
+   https://<your-host>/meta/instagram/organization/<organization-uuid>/deauthorize/
+
+   Data deletion request URL:
+   https://<your-host>/meta/instagram/organization/<organization-uuid>/data-deletion/
+   ```
+
+   Those routes use **only that organization's stored Instagram app secret**.
+   They never fall back to the deployment secret and never try every
+   organization's secret. Deletion is also bounded to workspaces under that
+   organization, because Meta's lifecycle `user_id` is app-scoped: two
+   different Meta Apps are allowed to give the same person different — or even
+   numerically colliding — identifiers, and one app must never delete another
+   organization's connections.
 
 2. **Add the app credentials.** Copy the *Instagram app ID* and *Instagram app
    secret* onto the deployment:
@@ -388,8 +404,12 @@ DATA_DELETION_INSTRUCTIONS_URL=https://...
 
 When a deployment-level Instagram Meta App is configured and `DEBUG=False`,
 `manage.py check --deploy` reports an error unless all three are HTTPS URLs.
-BrightBean deliberately does not ship generic legal text: the operator is the
-one who knows its legal entity, retention rules, subprocessors and jurisdiction.
+BYO organization Meta Apps require the same published legal surfaces for App
+Review; the startup check deliberately does not query database-backed
+credentials before migrations, so the operator must treat these URLs as
+mandatory in BYO mode too. BrightBean deliberately does not ship generic legal
+text: the operator is the one who knows its legal entity, retention rules,
+subprocessors and jurisdiction.
 
 ### Reviewer evidence checklist
 
@@ -409,7 +429,8 @@ account and shows the feature behind each requested permission:
 6. Include the public Privacy Policy, Terms, and Data Deletion Instructions
    URLs in the reviewer notes.
 7. In Meta Business Login settings, show the exact OAuth, deauthorize and data
-   deletion callback URLs listed above.
+   deletion callback URLs listed above. For a BYO organization app, show the
+   organization-scoped lifecycle URLs rather than the generic deployment URLs.
 
 After Advanced Access is approved, repeat the acceptance flow using a real
 professional account whose owner has **no app role**. Until that succeeds, D10
