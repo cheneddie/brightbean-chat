@@ -191,9 +191,7 @@ def extend_automation_pause(conversation: Conversation, by: timedelta) -> Conver
     """
     with transaction.atomic():
         fresh = (
-            Conversation.objects.for_workspace(conversation.workspace_id)
-            .select_for_update()
-            .get(pk=conversation.pk)
+            Conversation.objects.for_workspace(conversation.workspace_id).select_for_update().get(pk=conversation.pk)
         )
         now = timezone.now()
         current = fresh.automation_paused_until
