@@ -92,6 +92,7 @@ class TestValueHelpers:
         assert candidates[0] == hmac_digest(value)
         assert old_digest in candidates[1:]
 
+
 @pytest.mark.django_db
 class TestEncryptedFields:
     def test_text_field_round_trips_through_the_database(self, secret_value):
