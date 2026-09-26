@@ -62,6 +62,29 @@ class TestSignedRequest:
     def test_malformed_requests_are_rejected(self, value: str) -> None:
         assert parse_signed_request(value, app_secret=APP_SECRET) is None
 
+    def test_valid_hmac_with_standard_base64_alphabet_is_rejected(self) -> None:
+        """signed_request segments are strict unpadded Base64URL, not generic Base64."""
+        signed = ""
+        for issued_at in range(1_700_000_000, 1_700_001_000):
+            payload = json.dumps(
+                {"algorithm": "HMAC-SHA256", "issued_at": issued_at, "user_id": META_APP_USER_ID},
+                separators=(",", ":"),
+            ).encode("utf-8")
+            encoded_payload = base64.b64encode(payload).decode("ascii").rstrip("=")
+            signature = hmac.new(
+                APP_SECRET.encode("utf-8"),
+                encoded_payload.encode("ascii"),
+                hashlib.sha256,
+            ).digest()
+            encoded_signature = base64.b64encode(signature).decode("ascii").rstrip("=")
+            candidate = f"{encoded_signature}.{encoded_payload}"
+            if "+" in candidate or "/" in candidate:
+                signed = candidate
+                break
+
+        assert signed, "fixture search must find a standard-Base64-only character"
+        assert parse_signed_request(signed, app_secret=APP_SECRET) is None
+
 
 @pytest.mark.django_db
 class TestDataDeletionCallback:
