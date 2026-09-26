@@ -81,8 +81,16 @@ availability.
 - run the new callback/migration/system-check tests against the private repo + Postgres;
 - verify the Meta dashboard accepts both lifecycle callback URLs;
 - publish operator-reviewed Privacy Policy / Terms / Data Deletion Instructions;
-- submit Advanced Access for exactly the three required scopes;
-- record reviewer screencast/evidence;
+- submit Advanced Access for exactly the three required Instagram Login scopes:
+  `instagram_business_basic`, `instagram_business_manage_messages` and
+  `instagram_business_manage_comments`;
+- because BrightBean supports inbox replies from 24 hours through day 7 using
+  the `HUMAN_AGENT` tag, request/approve Meta's **Human Agent** feature as a
+  separate production capability and demonstrate a real human takeover. If
+  Human Agent is not approved, production acceptance must explicitly treat
+  replies outside the standard 24-hour window as unavailable;
+- record reviewer screencast/evidence for the three scopes and, when requested,
+  the Human Agent feature;
 - pass Business Verification if Meta requires it for the app;
 - complete a real-account E2E test with an Instagram professional account whose
   owner is not an app developer/tester;
