@@ -247,7 +247,7 @@ class TestOrganizationScopedCallbacks:
         assert wrong_namespace.status_code == 403
         assert ChannelConnection.objects.unscoped().filter(pk=instagram_connection.pk).exists()
 
-        accepted = _post(client, url, _signed_request(secret=f"org-meta-{tenancy.slug}"))
+        accepted = _post(client, url, _signed_request(secret="org-meta-secret"))
         assert accepted.status_code == 200
         assert not ChannelConnection.objects.unscoped().filter(pk=instagram_connection.pk).exists()
 
