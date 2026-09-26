@@ -51,11 +51,7 @@ def organization_instagram_app_secret(organization_id: Any) -> str:
     here would be wrong: a configured deployment app would shadow the BYO app
     whose callback URL Meta actually invoked.
     """
-    row = (
-        PlatformCredential.objects.for_org(organization_id)
-        .filter(platform=Platform.INSTAGRAM.value)
-        .first()
-    )
+    row = PlatformCredential.objects.for_org(organization_id).filter(platform=Platform.INSTAGRAM.value).first()
     if row is None:
         return ""
     credentials = dict(row.credentials or {})  # type: ignore[arg-type]
@@ -163,9 +159,7 @@ def receipt_for_code(code: str) -> MetaDataDeletionReceipt | None:
     if not code or len(code) > 200:
         return None
     current = hmac_digest(code)
-    receipt = MetaDataDeletionReceipt.objects.filter(
-        confirmation_digest__in=hmac_digest_candidates(code)
-    ).first()
+    receipt = MetaDataDeletionReceipt.objects.filter(confirmation_digest__in=hmac_digest_candidates(code)).first()
     if receipt is not None and receipt.confirmation_digest != current:
         MetaDataDeletionReceipt.objects.filter(
             pk=receipt.pk,
