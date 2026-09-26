@@ -13,6 +13,7 @@ import hashlib
 import hmac
 import json
 import logging
+import re
 import secrets
 from typing import Any
 
@@ -28,6 +29,8 @@ logger = logging.getLogger(__name__)
 
 MAX_SIGNED_REQUEST_CHARS = 16_384
 CONFIRMATION_BYTES = 24
+_B64URL_SEGMENT = re.compile(r"^[A-Za-z0-9_-]+$")
+
 
 
 def deployment_instagram_app_secret() -> str:
@@ -173,5 +176,10 @@ def receipt_for_code(code: str) -> MetaDataDeletionReceipt | None:
 
 
 def _b64url_decode(value: str) -> bytes:
+    # Meta signed_request uses unpadded Base64URL segments. Python's
+    # b64decode(..., altchars=b"-_") also accepts the standard '+'/'/'
+    # alphabet, so validate=True alone is not strict enough for the contract.
+    if not _B64URL_SEGMENT.fullmatch(value):
+        raise ValueError("not strict unpadded base64url")
     padding = "=" * (-len(value) % 4)
     return base64.b64decode((value + padding).encode("ascii"), altchars=b"-_", validate=True)
