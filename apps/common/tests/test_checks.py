@@ -59,9 +59,7 @@ class TestProductionSecrets:
 @pytest.mark.django_db
 class TestMetaReviewLegalUrls:
     def _configure_app(self, settings):
-        settings.PLATFORM_CREDENTIALS_FROM_ENV = {
-            "instagram": {"client_id": "123", "client_secret": "secret"}
-        }
+        settings.PLATFORM_CREDENTIALS_FROM_ENV = {"instagram": {"client_id": "123", "client_secret": "secret"}}
 
     def test_debug_does_not_require_public_legal_urls(self, settings):
         settings.DEBUG = True
