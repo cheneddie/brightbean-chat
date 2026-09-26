@@ -125,6 +125,7 @@ class MetaDataDeletionReceipt(BaseModel):
     def __str__(self) -> str:
         return f"{self.platform} deletion receipt {self.pk}"
 
+
 class WebhookEventStatus(models.TextChoices):
     """SPEC §5's ``webhook_event_log.status``."""
 
