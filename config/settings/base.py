@@ -33,6 +33,13 @@ environ.Env.read_env(env.str("DJANGO_ENV_FILE", default=str(BASE_DIR / ".env")),
 DEBUG = env("DEBUG")
 ALLOWED_HOSTS = env("ALLOWED_HOSTS")
 APP_URL = env("APP_URL")
+# Public legal URLs used by Meta App Review and the deployment's own users.
+# Empty is allowed in development and on deployments with no deployment-level
+# Instagram Meta app; the production system check enforces HTTPS once that app
+# is configured.
+PRIVACY_POLICY_URL = env("PRIVACY_POLICY_URL", default="")
+TERMS_OF_SERVICE_URL = env("TERMS_OF_SERVICE_URL", default="")
+DATA_DELETION_INSTRUCTIONS_URL = env("DATA_DELETION_INSTRUCTIONS_URL", default="")
 
 # ---------------------------------------------------------------------------
 # Secrets — enforced at boot, not lazily (SECURITY-BASELINE §8)

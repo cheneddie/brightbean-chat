@@ -42,6 +42,49 @@ Three things, and the third is the one that takes weeks rather than minutes.
    deployment — not one per workspace — because a Meta app has a single
    registered redirect URI. The workspace you are connecting into travels in a
    signed `state` parameter instead.
+   In the same *Business login settings* screen, configure the lifecycle URLs:
+
+   ```text
+   Deauthorize callback URL:
+   https://<your-host>/meta/instagram/deauthorize/
+
+   Data deletion request URL:
+   https://<your-host>/meta/instagram/data-deletion/
+   ```
+
+   Both verify Meta `signed_request` with the deployment Instagram app secret.
+   The OAuth code exchange identity is stored separately as
+   `meta_app_scoped_user_id`; the professional account id used for webhook
+   routing remains `external_id`. Lifecycle callbacks resolve **only** by the
+   app-scoped lifecycle identity and never guess by `external_id`.
+
+   A single lifecycle identity may have authorised more than one professional
+   account, so the deletion callback removes every matching Instagram
+   connection locally and returns a confirmation/status URL. A bad signature
+   cannot delete anything.
+
+   **Credential boundary:** these generic lifecycle URLs require a complete
+   deployment-level `PLATFORM_INSTAGRAM_CLIENT_ID` +
+   `PLATFORM_INSTAGRAM_CLIENT_SECRET`.
+
+   If an organization brings its own Meta App from the Django admin, register
+   that app with organization-scoped lifecycle URLs instead:
+
+   ```text
+   Deauthorize callback URL:
+   https://<your-host>/meta/instagram/organization/<organization-uuid>/deauthorize/
+
+   Data deletion request URL:
+   https://<your-host>/meta/instagram/organization/<organization-uuid>/data-deletion/
+   ```
+
+   Those routes use **only that organization's stored Instagram app secret**.
+   They never fall back to the deployment secret and never try every
+   organization's secret. Deletion is also bounded to workspaces under that
+   organization, because Meta's lifecycle `user_id` is app-scoped: two
+   different Meta Apps are allowed to give the same person different — or even
+   numerically colliding — identifiers, and one app must never delete another
+   organization's connections.
 
 2. **Add the app credentials.** Copy the *Instagram app ID* and *Instagram app
    secret* onto the deployment:
@@ -350,6 +393,61 @@ To connect accounts belonging to other people you need all three of:
 - **App Review**, submitted per permission, with a screencast showing the
   end-to-end use of each one;
 - **Business Verification** of the business that owns the app.
+
+BrightBean also implements the optional Meta **Human Agent** capability: an
+inbox reply between 24 hours and day 7 is sent with the `HUMAN_AGENT` tag.
+That extended window is not implied by approval of the three Instagram scopes.
+A deployment that intends to offer the 7-day inbox behavior must separately
+obtain the Human Agent feature in Meta App Review and demonstrate a genuine
+human-support handoff. Without that approval, treat the standard 24-hour window
+as the production limit even though the code path exists.
+
+Before submission, the production deployment also has to configure:
+
+```text
+PRIVACY_POLICY_URL=https://...
+TERMS_OF_SERVICE_URL=https://...
+DATA_DELETION_INSTRUCTIONS_URL=https://...
+```
+
+When a deployment-level Instagram Meta App is configured and `DEBUG=False`,
+`manage.py check --deploy` reports an error unless all three are HTTPS URLs.
+BYO organization Meta Apps require the same published legal surfaces for App
+Review; the startup check deliberately does not query database-backed
+credentials before migrations, so the operator must treat these URLs as
+mandatory in BYO mode too. BrightBean deliberately does not ship generic legal
+text: the operator is the one who knows its legal entity, retention rules,
+subprocessors and jurisdiction.
+
+### Reviewer evidence checklist
+
+Record one short screencast that starts from a clean professional Instagram
+account and shows the feature behind each requested permission:
+
+1. Sign in to BrightBean and open **Settings → Channels → Instagram**.
+2. Press **Connect**, show Instagram consent, then return to the connected
+   account row. This demonstrates `instagram_business_basic`.
+3. Create a comment trigger for one post and keyword. From a second Instagram
+   account, leave the matching comment; show the inbound event and configured
+   public reply. This demonstrates `instagram_business_manage_comments`.
+4. Show the private reply / DM arriving and reply from the second account;
+   show the resulting conversation in the BrightBean inbox. This demonstrates
+   `instagram_business_manage_messages`.
+5. If requesting **Human Agent**, show a real agent taking over an unresolved
+   conversation and explain why a reply outside the standard 24-hour window is
+   required. The reviewer evidence must show a human-support use case, not an
+   automation using the `HUMAN_AGENT` tag.
+6. Show the operator disconnecting the account and the row disappearing.
+7. Include the public Privacy Policy, Terms, and Data Deletion Instructions
+   URLs in the reviewer notes.
+8. In Meta Business Login settings, show the exact OAuth, deauthorize and data
+   deletion callback URLs listed above. For a BYO organization app, show the
+   organization-scoped lifecycle URLs rather than the generic deployment URLs.
+
+After Advanced Access is approved, repeat the acceptance flow using a real
+professional account whose owner has **no app role**. Until that succeeds, D10
+is not a production acceptance — tester/developer accounts prove only Standard
+Access behavior.
 
 Budget weeks, not days, and expect at least one rejection asking for a clearer
 screencast. This is a Meta process; nothing in this product changes it.

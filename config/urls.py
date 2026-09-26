@@ -179,6 +179,10 @@ urlpatterns = [
     # per-workspace path would need one whitelist entry per tenant. The workspace
     # travels in a signed ``state`` instead. See apps/channels/urls_oauth.py.
     path("channels/", include("apps.channels.urls_oauth")),
+    # Meta App Dashboard lifecycle callbacks for Instagram Login. Public,
+    # signed by the deployment-level Meta app secret, and deliberately outside
+    # the session-authenticated OAuth callback module.
+    path("meta/instagram/", include("apps.channels.urls_meta")),
     # Stripe's webhook, for the optional hosted billing integration.
     #
     # **Declared before the channels include below, and that is not stylistic.**

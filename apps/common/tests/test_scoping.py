@@ -152,6 +152,10 @@ NOT_TENANT_DATA: dict[str, str] = {
         "The org-level half of the credential-resolution chain: one row can serve every workspace "
         "in the organization, which is the point of it."
     ),
+    "channels.MetaDataDeletionReceipt": (
+        "Deployment-level anonymized Meta deletion receipts contain no workspace-owned identity; "
+        "the public confirmation capability resolves them before any tenant context exists."
+    ),
     "channels.WebhookEventLog": (
         "Hangs off the connection. The inbound webhook path has no session and no workspace — the "
         "caller is a platform — so there is nothing to scope it by at write time."

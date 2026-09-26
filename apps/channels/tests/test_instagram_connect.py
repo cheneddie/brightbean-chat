@@ -157,9 +157,42 @@ class TestCallback:
         assert connection.platform == Platform.INSTAGRAM
         # The professional-account id, because that is what arrives as entry[].id.
         assert connection.external_id == IG_ACCOUNT_ID
+        assert connection.meta_app_scoped_user_id == IG_ACCOUNT_ID
         assert connection.display_name == "@brightbean"
         assert oauth.access_token(connection) == LONG_LIVED
         assert oauth.token_expires_at(connection) is not None
+
+    def test_oauth_lifecycle_identity_is_stored_separately_from_professional_account_id(
+        self, tenancy: Tenancy, client_for: Any, instagram_app: Any
+    ) -> None:
+        lifecycle_user_id = "99887766554433221"
+
+        def distinct_identities(request: httpx.Request) -> httpx.Response:
+            path = request.url.path
+            if path.endswith("/oauth/access_token"):
+                return httpx.Response(
+                    200,
+                    json={"access_token": "short-lived", "user_id": int(lifecycle_user_id)},
+                )
+            if path.endswith("/access_token"):
+                return httpx.Response(
+                    200,
+                    json={"access_token": LONG_LIVED, "expires_in": 5_183_944},
+                )
+            return httpx.Response(
+                200,
+                json={"user_id": IG_ACCOUNT_ID, "username": "brightbean"},
+            )
+
+        client = client_for(tenancy.owner)
+        state = callback_state(client, workspace_id=tenancy.workspace.pk, user_id=tenancy.owner.pk)
+        with fake_oauth_api(distinct_identities):
+            response = client.get(CALLBACK, {"code": "auth-code", "state": state})
+
+        assert response.status_code == 302
+        connection = ChannelConnection.objects.for_workspace(tenancy.workspace).get()
+        assert connection.external_id == IG_ACCOUNT_ID
+        assert connection.meta_app_scoped_user_id == lifecycle_user_id
 
     def test_one_workspace_can_connect_multiple_instagram_accounts(
         self, tenancy: Tenancy, client_for: Any, instagram_app: Any
