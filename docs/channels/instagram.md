@@ -394,6 +394,14 @@ To connect accounts belonging to other people you need all three of:
   end-to-end use of each one;
 - **Business Verification** of the business that owns the app.
 
+BrightBean also implements the optional Meta **Human Agent** capability: an
+inbox reply between 24 hours and day 7 is sent with the `HUMAN_AGENT` tag.
+That extended window is not implied by approval of the three Instagram scopes.
+A deployment that intends to offer the 7-day inbox behavior must separately
+obtain the Human Agent feature in Meta App Review and demonstrate a genuine
+human-support handoff. Without that approval, treat the standard 24-hour window
+as the production limit even though the code path exists.
+
 Before submission, the production deployment also has to configure:
 
 ```text
@@ -425,10 +433,14 @@ account and shows the feature behind each requested permission:
 4. Show the private reply / DM arriving and reply from the second account;
    show the resulting conversation in the BrightBean inbox. This demonstrates
    `instagram_business_manage_messages`.
-5. Show the operator disconnecting the account and the row disappearing.
-6. Include the public Privacy Policy, Terms, and Data Deletion Instructions
+5. If requesting **Human Agent**, show a real agent taking over an unresolved
+   conversation and explain why a reply outside the standard 24-hour window is
+   required. The reviewer evidence must show a human-support use case, not an
+   automation using the `HUMAN_AGENT` tag.
+6. Show the operator disconnecting the account and the row disappearing.
+7. Include the public Privacy Policy, Terms, and Data Deletion Instructions
    URLs in the reviewer notes.
-7. In Meta Business Login settings, show the exact OAuth, deauthorize and data
+8. In Meta Business Login settings, show the exact OAuth, deauthorize and data
    deletion callback URLs listed above. For a BYO organization app, show the
    organization-scoped lifecycle URLs rather than the generic deployment URLs.
 
