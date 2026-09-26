@@ -223,12 +223,12 @@ class TestDataDeletionCallback:
 
 @pytest.mark.django_db
 class TestOrganizationScopedCallbacks:
-    def _configure_org_app(self, tenancy: Tenancy, *, secret: str = "org-meta-secret") -> None:
+    def _configure_org_app(self, tenancy: Tenancy, *, fixture_value: str = "org-meta-secret") -> None:
         org_platform_credential(
             tenancy,
             Platform.INSTAGRAM.value,
             client_id=f"org-app-{tenancy.slug}",
-            client_secret=secret,
+            client_secret=fixture_value,
         )
 
     def test_byo_callback_uses_the_org_secret_even_when_env_app_is_configured(
@@ -261,8 +261,8 @@ class TestOrganizationScopedCallbacks:
         other_tenancy: Tenancy,
         instagram_connection: ChannelConnection,
     ) -> None:
-        self._configure_org_app(tenancy, secret="first-org-secret")
-        self._configure_org_app(other_tenancy, secret="second-org-secret")
+        self._configure_org_app(tenancy, fixture_value="first-org-secret")
+        self._configure_org_app(other_tenancy, fixture_value="second-org-secret")
         _bind_lifecycle(instagram_connection)
 
         other = ChannelConnection.objects.create(
@@ -290,7 +290,7 @@ class TestOrganizationScopedCallbacks:
         tenancy: Tenancy,
         instagram_connection: ChannelConnection,
     ) -> None:
-        self._configure_org_app(tenancy, secret="deauth-org-secret")
+        self._configure_org_app(tenancy, fixture_value="deauth-org-secret")
         _bind_lifecycle(instagram_connection)
         url = reverse(
             "instagram_organization_deauthorize",
@@ -312,7 +312,7 @@ class TestOrganizationScopedCallbacks:
         instagram_connection: ChannelConnection,
     ) -> None:
         settings.PLATFORM_CREDENTIALS_FROM_ENV = {}
-        self._configure_org_app(tenancy, secret="org-only-secret")
+        self._configure_org_app(tenancy, fixture_value="org-only-secret")
         _bind_lifecycle(instagram_connection)
 
         response = _post(
@@ -331,8 +331,8 @@ class TestOrganizationScopedCallbacks:
         other_tenancy: Tenancy,
         instagram_connection: ChannelConnection,
     ) -> None:
-        self._configure_org_app(tenancy, secret="target-secret")
-        self._configure_org_app(other_tenancy, secret="foreign-secret")
+        self._configure_org_app(tenancy, fixture_value="target-secret")
+        self._configure_org_app(other_tenancy, fixture_value="foreign-secret")
         _bind_lifecycle(instagram_connection)
         url = reverse(
             "instagram_organization_deauthorize",
