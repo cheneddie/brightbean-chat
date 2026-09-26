@@ -69,9 +69,7 @@ class TestMetaAcceptanceReadiness:
         settings: Any,
     ) -> None:
         _ready_public_settings(settings)
-        settings.PLATFORM_CREDENTIALS_FROM_ENV = {
-            Platform.INSTAGRAM.value: {"verify_token": VERIFY_TOKEN}
-        }
+        settings.PLATFORM_CREDENTIALS_FROM_ENV = {Platform.INSTAGRAM.value: {"verify_token": VERIFY_TOKEN}}
         org_platform_credential(
             tenancy,
             Platform.INSTAGRAM.value,
@@ -119,9 +117,7 @@ class TestMetaAcceptanceReadiness:
 
     def test_unknown_organization_is_refused(self, settings: Any) -> None:
         _ready_public_settings(settings)
-        settings.PLATFORM_CREDENTIALS_FROM_ENV = {
-            Platform.INSTAGRAM.value: {"verify_token": VERIFY_TOKEN}
-        }
+        settings.PLATFORM_CREDENTIALS_FROM_ENV = {Platform.INSTAGRAM.value: {"verify_token": VERIFY_TOKEN}}
 
         with pytest.raises(CommandError, match="does not exist"):
             call_command(
