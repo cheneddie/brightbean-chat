@@ -41,6 +41,7 @@ def _post(client: Client, url: str, signed: str) -> Any:
     body = urlencode({"signed_request": signed})
     return client.post(url, data=body, content_type="application/x-www-form-urlencoded")
 
+
 def _bind_lifecycle(connection: ChannelConnection, user_id: str = META_APP_USER_ID) -> None:
     connection.meta_app_scoped_user_id = user_id
     connection.save(update_fields=["meta_app_scoped_user_id", "updated_at"])
@@ -183,9 +184,7 @@ class TestDataDeletionCallback:
 
         settings.SECRET_KEY = "new-deletion-receipt-secret"
         settings.ENCRYPTION_KEY_SALT = b"new-deletion-receipt-salt"
-        settings.ENCRYPTION_KEY_FALLBACKS = [
-            {"secret_key": old_secret, "salt": old_salt.decode("utf-8")}
-        ]
+        settings.ENCRYPTION_KEY_FALLBACKS = [{"secret_key": old_secret, "salt": old_salt.decode("utf-8")}]
 
         assert client.get(status_url).status_code == 200
         receipt.refresh_from_db()
@@ -212,8 +211,7 @@ class TestDataDeletionCallback:
 
         with db_connection.cursor() as cursor:
             cursor.execute(
-                "SELECT confirmation_digest, platform, deleted_connections "
-                "FROM channels_meta_data_deletion_receipt"
+                "SELECT confirmation_digest, platform, deleted_connections FROM channels_meta_data_deletion_receipt"
             )
             raw = repr(cursor.fetchone())
 
