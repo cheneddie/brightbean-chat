@@ -1,6 +1,6 @@
 # D10 — Meta Production Readiness
 
-Status: **source implementation complete; executable validation pending**
+Status: **source implementation complete; executable validated; Meta production acceptance pending**
 
 Tracking issue: `#22`
 
@@ -76,9 +76,38 @@ configured, Django security checks require all three to be public-style HTTPS
 URLs. The software validates configuration, not legal sufficiency or remote
 availability.
 
+## Local Meta acceptance readiness command
+
+After production settings are present, run:
+
+```bash
+python manage.py meta_acceptance_readiness --strict
+```
+
+It prints the exact OAuth redirect URI, deauthorize callback, data-deletion
+callback, deletion-status pattern and the Instagram Login scopes BrightBean
+requests. It also checks local deployment blockers without printing app secrets
+or webhook verify tokens.
+
+For an organization/BYO Meta App:
+
+```bash
+python manage.py meta_acceptance_readiness --organization <organization-uuid> --strict
+```
+
+BYO mode additionally fails if complete deployment-level Instagram app
+credentials are configured, because the normal OAuth resolution order is
+deployment environment → organization and the environment app would shadow the
+organization app. Remove the deployment app id/secret before treating that
+organization as BYO. The global Instagram webhook verify token remains required.
+
+The command only proves deployment-local readiness. Every App Review,
+Business Verification, real-account E2E and real Meta callback item is printed
+as `[MANUAL]` and can never be converted to PASS by this command.
+
 ## Still required before D10 can be called production-ready
 
-- run the new callback/migration/system-check tests against the private repo + Postgres;
+- executable validation is complete on PR #26 / CI #141; rerun the full CI after any further D10 source change;
 - verify the Meta dashboard accepts both lifecycle callback URLs;
 - publish operator-reviewed Privacy Policy / Terms / Data Deletion Instructions;
 - submit Advanced Access for exactly the three required Instagram Login scopes:
