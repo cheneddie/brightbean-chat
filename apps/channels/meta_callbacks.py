@@ -32,7 +32,6 @@ CONFIRMATION_BYTES = 24
 _B64URL_SEGMENT = re.compile(r"^[A-Za-z0-9_-]+$")
 
 
-
 def deployment_instagram_app_secret() -> str:
     """The deployment Meta app secret, or empty when generic callbacks are unsafe."""
     resolution = resolve_platform_credentials(Platform.INSTAGRAM.value)
